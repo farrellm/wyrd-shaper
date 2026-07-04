@@ -1,5 +1,252 @@
 # WyrdShaper
 
-Top down view like SNES Zelda, primary mechanic is your write your own spells as little computer programs, as you level up you gain access to more advanced control structures and longer programs, procedurally generated terrain and dungeons, something with names of things that when you interact with something a lot, you learn its name, which gives you power over it (similar to Kingkiller Chronicles). In the beginning, spells are assembled from blocks like scratch, but later you graduate to written programs.
+A top-down action-adventure in the spirit of 16-bit Zelda, where magic is a
+programming language and knowledge is literally power. You play a *wyrdshaper*
+— one who rewrites fate by speaking the world's true language. Spells are not
+found in chests or bought from vendors: you write them, as small programs,
+and the depth of what you can express grows with your understanding of the
+world itself.
 
-Haskell, aztecs for ECS, aztecs-gl, aztecs-glfw
+## Design Pillars
+
+1. **Magic is programming.** The spell system *is* the skill tree. Player
+   power comes from mastering constructs — sequencing, conditionals, loops,
+   and eventually recursion and higher-order spells — not from bigger numbers
+   on gear.
+2. **Knowledge is power.** Capability is gated by understanding. The Naming
+   system rewards attention and experimentation: the world quietly keeps
+   track of what you have truly engaged with, and pays it back as vocabulary.
+3. **The world is legible.** Procedurally generated terrain and dungeons obey
+   consistent rules. If fire spreads through dry grass once, it always will —
+   the world is a machine the player can learn to program.
+4. **Zelda-like moment-to-moment feel.** Real-time, readable, top-down.
+   Whatever depth lives in the spell editor, the second-to-second experience
+   is moving, dodging, and casting under pressure.
+
+## Core Mechanics
+
+### The Wyrdtongue
+
+Old stories agree on one thing: to know the true name of a thing is to hold
+power over it. The Wyrdtongue is the language those names belong to — the
+language the world was spoken in — and spells are programs written in it.
+
+Every spell, from the crudest firebolt to the endgame's self-modifying wards,
+is built from one core language:
+
+- **Values** — numbers, directions, durations, and (once learned) true names.
+- **Selectors** — expressions that resolve to targets at runtime: `nearest
+  foe`, `self`, `tile ahead`, `everything burning within 5`.
+- **Effect verbs** — the primitive actions: `bolt`, `push`, `shield`,
+  `kindle`, `douse`, `mend`, `bind`, `hush`…
+- **Control** — sequencing, `if`, bounded loops, `let` bindings.
+- **Triggers** — wards that wrap a spell body: *when struck*, *when a foe
+  crosses this line*, *when the flame dies*.
+
+#### Stage one: glyphs (block editor)
+
+Early on, spells are assembled from **glyph blocks** in a visual editor —
+snap-together pieces in the style of Scratch. The palette is small at first
+(a selector, a verb, maybe two verbs in sequence) and grows as you level:
+conditionals, then loops, then variables and wards.
+
+Two budgets keep early spells honest:
+
+- **Willpower** caps program length — how many glyphs you can hold in mind at
+  once. It grows with level.
+- **Mana** is spent per instruction executed, not per cast. A loop that
+  fires three bolts costs three bolts.
+
+#### Stage two: script (textual language)
+
+Mid-game, you learn to *write* the Wyrdtongue. The textual language contains
+everything the glyph editor can express — any glyph spell can be viewed as
+text — but it is a strict **superset**. Blocks cap out at loops and
+conditionals. Text unlocks what glyphs cannot say:
+
+- **Named spells with parameters** — define `chain n t` once, invoke it
+  anywhere.
+- **Recursion** — `chain` can call itself.
+- **Spells as values** — pass a spell to a spell: metamagic, delayed casts,
+  wards that install other wards.
+- **Names as values** — true names you have learned become first-class:
+  bind them, pass them, invoke them.
+
+```
+spell chain n t:
+  if n > 0:
+    bolt of fire at t
+    chain (n - 1) (next foe after t)
+```
+
+Graduating from glyphs to script is a story beat, not just a menu unlock —
+the moment the training wheels come off and the real language opens up.
+
+### Ticked Execution and Backlash
+
+Casting is **channeling**. A spell does not resolve instantly: the
+interpreter runs a few instructions per game tick while you stand and speak,
+and the world keeps moving around you.
+
+- Loops visibly repeat — a three-bolt loop launches its bolts one after
+  another, ticks apart.
+- Longer, more complex programs take longer to cast. Program structure is a
+  tactical decision, not just an intellectual one.
+- **Interruption**: taking a stagger mid-cast fizzles the spell, and the
+  **backlash** — wild energy released by the collapsing spell — scales with
+  the mana already committed. Big spells are big risks.
+- **Runtime errors backlash too.** A selector that finds no target, mana
+  exhausted mid-loop, recursion that never bottoms out — the spell collapses
+  and bites its caster. Debugging is a survival skill.
+
+Counterplay runs both ways: enemy casters channel under the same rules, and
+interrupting them is a core combat verb.
+
+### Naming
+
+Everything in the world — every substance, creature kind, and phenomenon —
+has a hidden **true name**. You cannot buy them, and no menu lists them.
+You earn them through familiarity.
+
+- The game tracks meaningful interaction: burning things and being burned,
+  standing in storms, listening to wind, working iron, fighting wolves.
+  Each deepens a hidden familiarity score with the thing itself.
+- At thresholds, you get **insight moments** — brief, uncanny flashes where
+  the thing almost makes sense ("for a heartbeat, the fire seems to lean
+  toward you"). These telegraph that a name is close.
+- At the top of the scale, you **learn the name** — and your spell
+  vocabulary permanently grows.
+
+Knowing a name changes what the language can do with its bearer:
+
+- Generic verbs get cheaper and stronger against it (`kindle` on wood is a
+  spark; `kindle` spoken with wood's true name is a bonfire).
+- Name-only verbs unlock: *command*, *quiet*, *unmake* — things you can only
+  do to what you truly know.
+- In script-stage spells, names are values: a spell can take a name as a
+  parameter and work on whatever you know well enough to name.
+
+The dictionary of names you have earned is, effectively, the game's second
+skill tree — and the deep names (iron, lightning, stone, the wind, the true
+name of a dungeon's guardian) are its endgame.
+
+### Bindings
+
+A binding is a spell-forged **link between two things**. Effects applied to
+one flow across the link to the other, at an efficiency set by how *similar*
+the two are — two arrows cut from the same shaft transfer almost perfectly;
+a candle flame and a distant bonfire, poorly and at great cost. Bindings
+drain upkeep mana while they hold.
+
+- **Puzzles**: heat a lever you cannot reach by binding it to a torch in
+  your hand; move a weight by binding it to a rock you can push.
+- **Combat**: bind two enemies and hurt one; bind an enemy's blade to your
+  shield.
+
+### Inscription
+
+Where channeled spells are speech, inscription is **writing**: freezing a
+spell into a physical object. An inscribed spell is a trigger-driven program
+that runs without its author — a ward carved on a door, a trap etched into a
+flagstone, a lantern that kindles itself at dusk.
+
+Inscription is the late-game outlet for the prepared, engineering-minded
+playstyle: instead of channeling under fire, you seed the battlefield ahead
+of time and let your programs fight for you.
+
+### Moment-to-Moment Play
+
+- Real-time top-down movement, dodge, and a humble physical attack for when
+  the mana runs dry.
+- **Quick slots**: finished spells bind to buttons and cast (channel) with a
+  press. The editor is for the workshop; combat is about choosing and timing
+  what you have already written.
+- **Procedural overworld**: noise-based biomes — forest, marsh, scrubland,
+  mountains — each biased toward different substances and creatures, so
+  *where you spend time shapes which names you learn*.
+- **Procedural dungeons**: room-graph layouts with lock-and-key structure
+  where the keys are language features. A door that needs four torches lit
+  within a time window wants a loop; a corridor of pressure plates wants a
+  ward; a sealed vault opens only to a spoken name.
+
+### Progression at a Glance
+
+| Tier | Editor | Constructs unlocked | Willpower (program size) | You can now… |
+|------|--------|--------------------|--------------------------|--------------|
+| 1 | Glyphs | selector + verb | 2–3 glyphs | fire a bolt at the nearest foe |
+| 2 | Glyphs | sequencing, `if` | ~5 glyphs | shield yourself, then strike back |
+| 3 | Glyphs | bounded loops, `let` | ~8 glyphs | volley spells, timed torch puzzles |
+| 4 | Glyphs | wards/triggers | ~12 glyphs | contingencies: *when struck, push all foes back* |
+| 5 | Script | named spells, parameters | pages, not glyphs | build a personal spellbook of reusable spells |
+| 6 | Script | recursion, spells-as-values | — | chain lightning, metamagic, delayed casts |
+| 7 | Script | names-as-values, inscription | — | command what you truly know; leave your spells behind in the world |
+
+## Build Plan
+
+### Tech Stack
+
+- **Language**: Haskell, GHC2024, cabal.
+- **Engine**: [`aztecs`](https://hackage.haskell.org/package/aztecs) — a
+  modular game engine and archetype-based ECS with pure systems. Companion
+  packages from the [aztecs-hs](https://github.com/aztecs-hs) org:
+  - `aztecs-glfw` — windowing and input
+  - `aztecs-gl` — OpenGL rendering
+  - `aztecs-gl-text` — text rendering (spell editor, UI)
+  - `aztecs-transform`, `aztecs-hierarchy` — transforms and entity hierarchy
+- **Parsing**: `megaparsec` for the textual Wyrdtongue.
+- **Art**: placeholder colored quads and simple sprites until late; the
+  design does not depend on art quality.
+
+### Milestones
+
+Each milestone has a concrete "done when" so progress is checkable.
+
+- **M0 — Skeleton.** Add dependencies; open a GLFW window; render a quad
+  moving under an aztecs system.
+  *Done when: a shape moves on screen at a stable tick rate.*
+- **M1 — Player & world.** Tilemap rendering, player movement with
+  collision, camera follow.
+  *Done when: you can walk around a hand-authored map and bump into walls.*
+- **M2 — Spell VM core.** The core AST and the ticked coroutine interpreter
+  as an ECS system; mana; first effect verbs (`bolt`, `push`, `kindle`);
+  hardcoded spells castable from quick slots. Build the VM before any
+  editor — it is the riskiest piece and everything else hangs off it.
+  *Done when: pressing a button channels a multi-instruction spell over
+  several ticks and its effects land in the world.*
+- **M3 — Block editor.** In-game glyph editor over the core AST; save/load
+  spells; Willpower program-size budget enforced.
+  *Done when: a spell assembled in-game casts from a quick slot.*
+- **M4 — Combat & backlash.** Enemies with simple AI, damage, and the
+  interruption/fizzle/backlash rules for both player and enemy casters.
+  *Done when: you can lose — and a stagger mid-cast visibly hurts you.*
+- **M5 — Naming.** Familiarity-tracking components, insight events, name
+  unlocks feeding the spell vocabulary (cost/power modifiers, name-gated
+  verbs).
+  *Done when: burning enough things teaches you fire's name, and it changes
+  what your fire spells do.*
+- **M6 — Procgen.** Noise-based overworld chunks with biomes; room-graph
+  dungeons with locks keyed to language features.
+  *Done when: a fresh seed produces an explorable overworld and a
+  completable dungeon whose puzzle requires a loop or ward.*
+- **M7 — Text language.** Megaparsec parser for the script superset
+  (definitions, parameters, recursion, spells- and names-as-values)
+  targeting the same VM; in-game text editor via `aztecs-gl-text`.
+  *Done when: the recursive `chain` example above parses, casts, and can be
+  round-tripped from an old glyph spell.*
+- **M8 — Bindings & inscription.** The link system with similarity-based
+  efficiency and upkeep; inscribing spells into world objects with triggers.
+  *Done when: one puzzle is solvable only by binding, and an inscribed trap
+  fires with the player standing idle.*
+- **M9 — Progression & polish.** Tier/level progression, save/load, audio,
+  balancing instruction costs, real art pass.
+
+### Risks
+
+- **`aztecs` is young (pre-1.0).** Pin versions and expect API churn between
+  releases; keep engine-facing code in a thin layer so migrations stay
+  cheap.
+- **In-game editor UX** (both glyph and text) is the biggest unknown —
+  prototype it early inside M3 and be ready to iterate.
+- **Balance** of per-instruction mana costs, Willpower budgets, and backlash
+  scaling will need sustained playtesting; keep the numbers in data, not
+  code.
