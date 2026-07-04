@@ -35,9 +35,12 @@ is an upstream limitation, not a bug in this repo.
 
 ## Milestone status
 
-M0 (Skeleton) and M1 (Player & world: tilemap, keyboard movement with tile
-collision, camera follow) are done, per `CONCEPT.md`. Next up: **M2 — Spell
-VM core**.
+M0 (Skeleton), M1 (Player & world: tilemap, keyboard movement with tile
+collision, camera follow), and M2 (Spell VM core: `Verb`/`Selector`/`Instr`
+AST in `app/Spell.hs`, a ticked coroutine interpreter with per-instruction
+windup in `app/Main.hs`'s `tick`, mana, and `bolt`/`push`/`kindle` castable
+from quick slots `1`/`2`/`3`) are done, per `CONCEPT.md`. Next up: **M3 —
+Block editor**.
 
 ## aztecs gotchas (verified against source, current as of aztecs-0.17.1 / aztecs-gl-0.3.0 / aztecs-glfw-0.2.0)
 
@@ -58,9 +61,15 @@ pin down — worth keeping until covered by better upstream docs.
   no swap-interval, no delay. It just polls events, runs one tick, swaps
   buffers, and recurses as fast as possible. A stable tick rate has to be
   implemented in application code (e.g. `threadDelay`).
-- **`Component` instances need `{-# LANGUAGE TypeFamilies #-}`** in the
-  defining module, even for trivial instances with no explicit `StorageT`
-  override — the class has an associated type family.
+- **`Component` instances need an associated-type-family extension in
+  scope** (the class has `type StorageT a`), but **GHC2024 already includes
+  `TypeFamilies`** — verified by actually removing the
+  `{-# LANGUAGE TypeFamilies #-}` pragma from `app/Main.hs` (which defines
+  this repo's first custom `Component` instances) and confirming it still
+  compiles. Kept the explicit pragma anyway for clarity/robustness against a
+  different `default-language`, but it's redundant under GHC2024 specifically
+  — don't be alarmed if upstream example code (Haskell2010, explicit pragma
+  lists) needs it and this repo doesn't.
 - GHC2024 already includes `TypeApplications`, `FlexibleInstances`,
   `MultiParamTypeClasses`, and `NumericUnderscores`, so example code
   targeting Haskell2010 (upstream examples repo) carries pragmas for these
@@ -87,3 +96,25 @@ pin down — worth keeping until covered by better upstream docs.
   `keyJustUnpressed` are edge-triggered.
 - **No collision/AABB helpers exist** anywhere in `aztecs`, `aztecs-gl`, or
   `aztecs-transform` — hand-roll tile/AABB checks (see `app/Tilemap.hs`).
+- **`despawn` does not run component lifecycle hooks** — verified from
+  source: `Aztecs.ECS.Access.despawn` calls `World.despawn` →
+  `Entities.despawn`, and unlike `insert`/`remove`/`spawn` there's no
+  `unAccess hook` anywhere in that path. Calling it directly on a
+  renderable, `Parent`-ed entity skips `Rectangle`/`Material`'s hooks (VBO +
+  render-group cleanup) and, worse, `Parent`'s hook — the thing that detaches
+  the entity from its parent's `Children` set. Left unremoved, `Children`
+  only grows forever and transform propagation (which walks the full
+  `Children` set on every parent-transform change) gets silently slower every
+  tick for the rest of the session — no crash, just an unbounded leak. Always
+  `remove` hook-owning components (`Rectangle`, `Material`, `Parent`, ...)
+  before `despawn`-ing anything renderable/parented — see
+  `despawnRenderable` in `app/Main.hs`.
+- **`Aztecs.ECS.Query`/`system` (not just direct `EntityID` `lookup`/
+  `insert`) is the idiomatic way to iterate an unknown-size, dynamically
+  spawned set of entities** — e.g. `app/Main.hs`'s `stepLifetimes`, which
+  decrements every live `Lifetime` component and despawns expired ones via
+  `system . runQuery $ (,) <$> entity <*> queryMapAccum step`. This mirrors
+  `aztecs-examples/src/SpriteSheet.hs`'s `animate`. Reach for this when the
+  entity count isn't known in advance (M1/M2's fixed entities — player,
+  world, one boulder, one torch — were hand-tracked via a `GameEntities`
+  record instead, which is simpler when the set is small and static).
