@@ -19,7 +19,7 @@ common warnings
 executable wyrdshaper
     import:           warnings
     main-is:          Main.hs
-    other-modules:    Tilemap
+    other-modules:    Tilemap, Spell
     -- other-extensions:
     build-depends:
         base ^>=4.21.2.0,

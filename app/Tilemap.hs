@@ -8,7 +8,13 @@ module Tilemap
     mapHeightPx,
     tileMap,
     playerStartPx,
+    boulderStartTile,
+    torchTile,
     isWallAtPx,
+    isWallAtTile,
+    pixelToTile,
+    tileCenterPx,
+    tileFacingFromMovement,
     spawnTiles,
   )
 where
@@ -61,24 +67,56 @@ tileAt (TileMap rows) (col, rowTop)
 isWallAtPx :: TileMap -> V2 Int -> Bool
 isWallAtPx tm p = tileAt tm (pixelToTile p) == Wall
 
+-- | Tile-coordinate counterpart of 'isWallAtPx', for callers (spell effects)
+-- that already work in (col, rowTop) space and shouldn't round-trip through
+-- pixels just to ask "is this tile a wall".
+isWallAtTile :: TileMap -> (Int, Int) -> Bool
+isWallAtTile tm pos = tileAt tm pos == Wall
+
+-- | Find the (col, rowTop) tile coordinate of the first occurrence of a
+-- marker character in the authored map, top row first. Errors if the marker
+-- doesn't appear -- markers passed here are all required set pieces (player
+-- start, boulder, torch), same contract as the old inline '@' search this
+-- replaces.
+findMarkerTile :: Char -> [String] -> (Int, Int)
+findMarkerTile marker rows =
+  case positions of
+    (p : _) -> p
+    [] -> error $ "Tilemap: rawMap has no '" ++ [marker] ++ "' marker"
+  where
+    positions =
+      [ (col, rowTop)
+        | (rowTop, row) <- zip [0 ..] rows,
+          (col, c) <- zip [0 ..] row,
+          c == marker
+      ]
+
+-- | Convert a raw movement delta (pixel/world space, Y-up) into a unit
+-- (colDelta, rowTopDelta) step in tile space, applying the same flip as
+-- 'tileCenterPx'/'pixelToTile' so callers never do row arithmetic
+-- themselves. Diagonal input resolves to vertical priority (arbitrary but
+-- explicit tie-break -- there's no meaningful diagonal "tile ahead").
+-- 'Nothing' if there's no movement to derive a facing from.
+tileFacingFromMovement :: V2 Int -> Maybe (Int, Int)
+tileFacingFromMovement (V2 dx dy)
+  | dy /= 0 = Just (0, negate (signum dy))
+  | dx /= 0 = Just (signum dx, 0)
+  | otherwise = Nothing
+
 parseMap :: [String] -> (TileMap, V2 Int)
 parseMap rows =
   ( TileMap [[if c == '#' then Wall else Floor | c <- row] | row <- rows],
-    case starts of
-      (p : _) -> p
-      [] -> error "Tilemap: rawMap has no '@' start marker"
+    tileCenterPx (findMarkerTile '@' rows)
   )
-  where
-    starts =
-      [ tileCenterPx (col, rowTop)
-        | (rowTop, row) <- zip [0 ..] rows,
-          (col, c) <- zip [0 ..] row,
-          c == '@'
-      ]
 
 tileMap :: TileMap
 playerStartPx :: V2 Int
 (tileMap, playerStartPx) = parseMap rawMap
+
+-- | Boulder and torch start tiles, found the same way as the player start.
+boulderStartTile, torchTile :: (Int, Int)
+boulderStartTile = findMarkerTile 'B' rawMap
+torchTile = findMarkerTile 'K' rawMap
 
 -- | Spawn the tilemap's renderable entities parented to the given world
 -- entity: one big background quad for the floor, plus one quad per wall
@@ -115,7 +153,7 @@ rawMap :: [String]
 rawMap =
   [ "########################################",
     "#......................................#",
-    "#.@....................................#",
+    "#.@..B..K..............................#",
     "#......................................#",
     "#.......######........########.........#",
     "#.......######........########.........#",
