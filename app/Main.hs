@@ -1,5 +1,3 @@
-{-# LANGUAGE TypeFamilies #-}
-
 module Main (main) where
 
 import Aztecs
@@ -8,32 +6,69 @@ import Aztecs.GLFW
 import Control.Concurrent (threadDelay)
 import Control.Monad.IO.Class (liftIO)
 import System.IO (hFlush, stdout)
+import Tilemap
 import Prelude hiding (lookup)
 
 windowW, windowH :: Int
 windowW = 800
 windowH = 600
 
--- | Fixed simulation tick rate; also the units of `Velocity` ("px/tick").
+-- | Fixed simulation tick rate.
 tickHz :: Int
 tickHz = 60
 
 tickMicros :: Int
 tickMicros = 1_000_000 `div` tickHz
 
--- | Constant per-tick displacement, in the same (V2 Int) units as
--- Transform2D's translation.
-newtype Velocity = Velocity (V2 Int)
+playerSpeed :: Int
+playerSpeed = 3
 
-instance (Monad m) => Component m Velocity
+playerHalfExtent :: V2 Int
+playerHalfExtent = V2 12 12
 
--- | Advance every entity with both a Velocity and a Transform2D, wrapping
--- at the window edges so the shape stays visible forever.
-move :: (Monad m) => Query m Transform2D
-move = queryMapWith go query
+movementDelta :: Keys -> V2 Int
+movementDelta keys = V2 dx dy
   where
-    go (Velocity v) t = t {transformTranslation = wrap (transformTranslation t + v)}
-    wrap (V2 x y) = V2 (x `mod` windowW) (y `mod` windowH)
+    axis pos neg =
+      (if keyPressed pos keys then playerSpeed else 0)
+        - (if keyPressed neg keys then playerSpeed else 0)
+    dx = axis Key'D Key'A
+    dy = axis Key'W Key'S
+
+-- | The four corners of an axis-aligned box, using the last occupied pixel
+-- (not the exclusive boundary) on the high side so a box flush against a
+-- tile edge doesn't falsely register as overlapping the next tile.
+aabbCorners :: V2 Int -> V2 Int -> [V2 Int]
+aabbCorners (V2 cx cy) (V2 hw hh) =
+  [ V2 (cx - hw) (cy - hh),
+    V2 (cx + hw - 1) (cy - hh),
+    V2 (cx - hw) (cy + hh - 1),
+    V2 (cx + hw - 1) (cy + hh - 1)
+  ]
+
+collides :: V2 Int -> Bool
+collides center = any (isWallAtPx tileMap) (aabbCorners center playerHalfExtent)
+
+-- | Resolve a proposed move against the tilemap one axis at a time, so the
+-- player slides along a wall instead of stopping dead on diagonal input.
+resolveMove :: V2 Int -> V2 Int -> V2 Int
+resolveMove center (V2 dx dy) =
+  let afterX = center + V2 dx 0
+      center' = if collides afterX then center else afterX
+      afterY = center' + V2 0 dy
+   in if collides afterY then center' else afterY
+
+-- | Clamp a camera offset so the window never shows past the map edge on
+-- this axis, centering the player otherwise. Falls back to centering the
+-- map itself if it's smaller than the window on this axis.
+clampAxis :: Int -> Int -> Int -> Int
+clampAxis playerPos winSize mapSize
+  | mapSize <= winSize = (winSize - mapSize) `div` 2
+  | otherwise = max (winSize - mapSize) (min 0 (winSize `div` 2 - playerPos))
+
+cameraOffset :: V2 Int -> V2 Int
+cameraOffset (V2 px py) =
+  V2 (clampAxis px windowW mapWidthPx) (clampAxis py windowH mapHeightPx)
 
 main :: IO ()
 main = runAccess_ $ do
@@ -41,26 +76,39 @@ main = runAccess_ $ do
     spawn $
       bundle
         Window
-          { windowTitle = "WyrdShaper -- M0 Skeleton",
+          { windowTitle = "WyrdShaper -- M1 Player & World",
             windowWidth = windowW,
             windowHeight = windowH
           }
 
-  _ <-
+  worldEntity <- spawn $ bundle (transform2d :: Transform2D)
+  spawnTiles worldEntity
+
+  playerEntity <-
     spawn $
-      bundle (Rectangle 60 60)
-        <> bundle (transform2d {transformTranslation = V2 100 100} :: Transform2D)
-        <> bundle (color 1 0 0 1)
-        <> bundle (Velocity (V2 3 2))
-        <> bundle (Parent windowEntity)
+      bundle (Rectangle 24 24)
+        <> bundle (transform2d {transformTranslation = playerStartPx} :: Transform2D)
+        <> bundle (color 0.9 0.2 0.2 1)
+        <> bundle (Parent worldEntity)
 
   runAccessGLFW $ do
-    _ <- system $ runQuery move
+    mKeys <- lookup @_ @Keys windowEntity
+    let keys = maybe mempty id mKeys
+
+    mTransform <- lookup @_ @Transform2D playerEntity
+    case mTransform of
+      Just t -> do
+        let center' = resolveMove (transformTranslation t) (movementDelta keys)
+        insert playerEntity . bundle $ t {transformTranslation = center'}
+        insert worldEntity . bundle $
+          (transform2d {transformTranslation = cameraOffset center'} :: Transform2D)
+      Nothing -> return ()
+
     render
     liftIO $ threadDelay tickMicros
-    mKeys <- lookup @_ @Keys windowEntity
+
     case mKeys of
-      Just keys
-        | keyJustPressed Key'Escape keys ->
+      Just k
+        | keyJustPressed Key'Escape k ->
             liftIO (putStrLn "Escape pressed, exiting..." >> hFlush stdout) >> return True
       _ -> return False

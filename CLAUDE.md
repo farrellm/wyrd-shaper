@@ -35,8 +35,9 @@ is an upstream limitation, not a bug in this repo.
 
 ## Milestone status
 
-Currently on **M0 — Skeleton** (window + a quad moving under an aztecs
-system, per `CONCEPT.md`). Next up: **M1 — Player & world**.
+M0 (Skeleton) and M1 (Player & world: tilemap, keyboard movement with tile
+collision, camera follow) are done, per `CONCEPT.md`. Next up: **M2 — Spell
+VM core**.
 
 ## aztecs gotchas (verified against source, current as of aztecs-0.17.1 / aztecs-gl-0.3.0 / aztecs-glfw-0.2.0)
 
@@ -64,3 +65,25 @@ pin down — worth keeping until covered by better upstream docs.
   `MultiParamTypeClasses`, and `NumericUnderscores`, so example code
   targeting Haskell2010 (upstream examples repo) carries pragmas for these
   that are redundant here.
+- **`Rectangle w h` is centered on its `Transform2D` translation** (mesh
+  vertices run `-w/2..w/2`, `-h/2..h/2`), not corner-anchored. Matters for
+  any tile/grid layout math.
+- **No camera/viewport component exists** anywhere in `aztecs-gl` or
+  `aztecs-transform`. `render` projects with a fixed orthographic matrix
+  over the `Window`'s raw pixel dimensions. To fake camera scrolling: parent
+  all world-space entities to one "world" entity and update *its* local
+  `Transform2D` each tick — every entity's `Transform2D` automatically gets
+  a `GlobalTransform2D` (`localT <> parentGlobalT`) that recursively
+  propagates to `Children` whenever a parent's local transform changes
+  (`aztecs-transform`'s `Component` instance), and `render` always draws
+  from `GlobalTransform2D`, never the local one. So moving the one parent
+  entity moves everything under it for free.
+- **`Keys` can only be read via `lookup @_ @Keys windowEntity`** in the
+  top-level `Access` monad closure passed to `runAccessGLFW` — there's no
+  way to read it from inside a `Query`-based `system`. Fetch it once per
+  tick and thread it manually into plain `lookup`/`insert` calls on specific
+  entities (mirrors the upstream `aztecs-examples` `Pong.hs` pattern).
+  `keyPressed` is the continuously-held check (for movement); `keyJustPressed`/
+  `keyJustUnpressed` are edge-triggered.
+- **No collision/AABB helpers exist** anywhere in `aztecs`, `aztecs-gl`, or
+  `aztecs-transform` — hand-roll tile/AABB checks (see `app/Tilemap.hs`).
