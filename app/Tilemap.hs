@@ -118,22 +118,30 @@ boulderStartTile, torchTile :: (Int, Int)
 boulderStartTile = findMarkerTile 'B' rawMap
 torchTile = findMarkerTile 'K' rawMap
 
--- | Spawn the tilemap's renderable entities parented to the given world
--- entity: one big background quad for the floor, plus one quad per wall
--- tile. Floor tiles don't get individual quads -- 'Rectangle' spawns its
--- own private mesh/material entity per call with no automatic batching
--- across entities, so one background quad is far cheaper for no visual
--- difference.
-spawnTiles :: EntityID -> Access IO ()
-spawnTiles worldEntity = do
-  spawn_ $
-    bundle (Rectangle (fromIntegral mapWidthPx) (fromIntegral mapHeightPx))
-      <> bundle
-        ( transform2d {transformTranslation = V2 (mapWidthPx `div` 2) (mapHeightPx `div` 2)} ::
-            Transform2D
-        )
-      <> bundle (color 0.15 0.15 0.18 1)
-      <> bundle (Parent worldEntity)
+-- | Spawn the tilemap's renderable entities: one big background quad for
+-- the floor, plus one quad per wall tile. Floor tiles don't get individual
+-- quads -- 'Rectangle' spawns its own private mesh/material entity per call
+-- with no automatic batching across entities, so one background quad is far
+-- cheaper for no visual difference.
+--
+-- Each entity is spawned with 'Parent windowEntity' (not 'worldEntity')
+-- because 'Rectangle's mesh registration only fires if the entity's
+-- /immediate/ parent carries the window's raw handle -- it doesn't walk
+-- further up the hierarchy. Once that one-time registration has happened,
+-- the entity is reparented to 'worldEntity' so it participates in the
+-- camera-follow transform hierarchy instead.
+spawnTiles :: EntityID -> EntityID -> Access IO ()
+spawnTiles windowEntity worldEntity = do
+  floorE <-
+    spawn $
+      bundle (Rectangle (fromIntegral mapWidthPx) (fromIntegral mapHeightPx))
+        <> bundle
+          ( transform2d {transformTranslation = V2 (mapWidthPx `div` 2) (mapHeightPx `div` 2)} ::
+              Transform2D
+          )
+        <> bundle (color 0.15 0.15 0.18 1)
+        <> bundle (Parent windowEntity)
+  insert floorE $ bundle (Parent worldEntity)
   mapM_ spawnWall wallPositions
   where
     wallPositions =
@@ -142,12 +150,14 @@ spawnTiles worldEntity = do
           (col, t) <- zip [0 ..] row,
           t == Wall
       ]
-    spawnWall pos =
-      spawn_ $
-        bundle (Rectangle (fromIntegral tileSize) (fromIntegral tileSize))
-          <> bundle (transform2d {transformTranslation = tileCenterPx pos} :: Transform2D)
-          <> bundle (color 0.45 0.40 0.35 1)
-          <> bundle (Parent worldEntity)
+    spawnWall pos = do
+      wallE <-
+        spawn $
+          bundle (Rectangle (fromIntegral tileSize) (fromIntegral tileSize))
+            <> bundle (transform2d {transformTranslation = tileCenterPx pos} :: Transform2D)
+            <> bundle (color 0.45 0.40 0.35 1)
+            <> bundle (Parent windowEntity)
+      insert wallE $ bundle (Parent worldEntity)
 
 rawMap :: [String]
 rawMap =

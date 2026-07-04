@@ -54,9 +54,23 @@ pin down — worth keeping until covered by better upstream docs.
   `Aztecs` module.
 - **`aztecs-sdl` is archived.** GLFW + `aztecs-gl` (OpenGL) is the actively
   maintained rendering path, not SDL.
-- **`render` (`Aztecs.GL.D2`) only draws entities parented to a window.**
-  Any renderable entity needs a `Parent windowEntity` component or it's
-  silently skipped.
+- **Shape components (`Rectangle`/`Circle`/`Triangle`) only register as
+  renderable if their *immediate* `Parent` is the window entity at the
+  moment the shape component is inserted** — `inParentWindowContext`
+  (`Aztecs.GL.Internal`) checks exactly one hop, it doesn't walk further up
+  the ancestor chain. Get this wrong (e.g. parent straight to an
+  intermediate "world"/camera entity instead) and the shape's mesh is
+  never compiled and never added to `RenderGroups` — no error, just a
+  black window. If you need the entity to *also* live under a different
+  parent for hierarchy/transform purposes (see the camera gotcha below),
+  spawn it with `Parent windowEntity` first, then immediately `insert` a
+  new `Parent` pointing at the real parent — `Parent`'s `componentOnChange`
+  (`Aztecs.Hierarchy`) correctly moves it between the old and new parent's
+  `Children` sets, and `GlobalTransform2D` propagation (see below) follows
+  the *current* `Children`, not whatever was current at spawn time. This
+  cost real research time to track down (a M1/M2 regression that made the
+  window render solid black) — see `spawnTiles` in `app/Tilemap.hs` and the
+  player/boulder/torch/`spawnImpact` spawns in `app/Main.hs` for the pattern.
 - **`runAccessGLFW` does not throttle the loop at all** — no vsync,
   no swap-interval, no delay. It just polls events, runs one tick, swaps
   buffers, and recurses as fast as possible. A stable tick rate has to be
@@ -86,7 +100,9 @@ pin down — worth keeping until covered by better upstream docs.
   propagates to `Children` whenever a parent's local transform changes
   (`aztecs-transform`'s `Component` instance), and `render` always draws
   from `GlobalTransform2D`, never the local one. So moving the one parent
-  entity moves everything under it for free.
+  entity moves everything under it for free. Renderables must still be
+  spawned `Parent windowEntity` first and reparented to the world entity
+  afterward — see the shape-registration gotcha above.
 - **`Keys` can only be read via `lookup @_ @Keys windowEntity`** in the
   top-level `Access` monad closure passed to `runAccessGLFW` — there's no
   way to read it from inside a `Query`-based `system`. Fetch it once per

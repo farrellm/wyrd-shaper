@@ -217,14 +217,21 @@ stepMovementAndFacing ge keys t = do
 -- | Spawn a short-lived impact flash at a tile -- the effect that
 -- demonstrates "effects land in the world" for 'Bolt', which always hits
 -- whatever's ahead regardless of what's there.
+--
+-- Spawned with 'Parent (windowEntity ge)' first so 'Rectangle's one-time
+-- mesh registration succeeds (it only checks the immediate parent, not the
+-- full ancestor chain -- see the aztecs-gl gotcha in CLAUDE.md), then
+-- reparented to 'worldEntity' for camera-follow.
 spawnImpact :: GameEntities -> (Int, Int) -> Access IO ()
-spawnImpact ge tilePos =
-  spawn_ $
-    bundle (Rectangle (fromIntegral tileSize * 0.6) (fromIntegral tileSize * 0.6))
-      <> bundle (transform2d {transformTranslation = tileCenterPx tilePos} :: Transform2D)
-      <> bundle (color 1.0 0.55 0.1 1)
-      <> bundle (Parent (worldEntity ge))
-      <> bundle (Lifetime flashLifetimeTicks)
+spawnImpact ge tilePos = do
+  impactE <-
+    spawn $
+      bundle (Rectangle (fromIntegral tileSize * 0.6) (fromIntegral tileSize * 0.6))
+        <> bundle (transform2d {transformTranslation = tileCenterPx tilePos} :: Transform2D)
+        <> bundle (color 1.0 0.55 0.1 1)
+        <> bundle (Parent (windowEntity ge))
+        <> bundle (Lifetime flashLifetimeTicks)
+  insert impactE $ bundle (Parent (worldEntity ge))
 
 -- | Apply one instruction's effect. Mana is spent whether or not the
 -- effect finds anything to act on -- CONCEPT.md is explicit that cost is
@@ -334,33 +341,40 @@ main = runAccess_ $ do
           }
 
   worldEntity' <- spawn $ bundle (transform2d :: Transform2D)
-  spawnTiles worldEntity'
+  spawnTiles windowEntity' worldEntity'
 
+  -- Each of the player/boulder/torch entities below is spawned with
+  -- 'Parent windowEntity'' first so 'Rectangle's one-time mesh registration
+  -- succeeds (it only checks the immediate parent), then reparented to
+  -- 'worldEntity'' for camera-follow. See 'Tilemap.spawnTiles'.
   playerEntity' <-
     spawn $
       bundle (Rectangle 24 24)
         <> bundle (transform2d {transformTranslation = playerStartPx} :: Transform2D)
         <> bundle (color 0.9 0.2 0.2 1)
-        <> bundle (Parent worldEntity')
+        <> bundle (Parent windowEntity')
         <> bundle (Facing (0, 1))
         <> bundle (Mana startingManaMax startingManaMax 0)
         <> bundle (Casting [] 0)
+  insert playerEntity' $ bundle (Parent worldEntity')
 
   boulderEntity' <-
     spawn $
       bundle (Rectangle (fromIntegral tileSize * 0.8) (fromIntegral tileSize * 0.8))
         <> bundle (transform2d {transformTranslation = tileCenterPx boulderStartTile} :: Transform2D)
         <> bundle (color 0.5 0.35 0.2 1)
-        <> bundle (Parent worldEntity')
+        <> bundle (Parent windowEntity')
         <> bundle (TilePos boulderStartTile)
+  insert boulderEntity' $ bundle (Parent worldEntity')
 
   torchEntity' <-
     spawn $
       bundle (Rectangle (fromIntegral tileSize * 0.5) (fromIntegral tileSize * 0.5))
         <> bundle (transform2d {transformTranslation = tileCenterPx torchTile} :: Transform2D)
         <> bundle (color 0.4 0.4 0.4 1)
-        <> bundle (Parent worldEntity')
+        <> bundle (Parent windowEntity')
         <> bundle (Lit False)
+  insert torchEntity' $ bundle (Parent worldEntity')
 
   let manaBarPos =
         V2 (manaBarMargin + round (manaBarMaxWidth / 2)) (windowH - manaBarMargin)
