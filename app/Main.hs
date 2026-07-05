@@ -1,4 +1,6 @@
 module Main (main) where
 
+import qualified Wyrdshaper
+
 main :: IO ()
-main = putStrLn "Hello, Haskell!"
+main = Wyrdshaper.run
