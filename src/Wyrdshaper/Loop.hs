@@ -27,16 +27,18 @@ tickRate = 60
 maxFrameDelta :: Double
 maxFrameDelta = 0.25
 
--- | Run the GLFW frame loop with a fixed-timestep @tick@, rendering each
+-- | Run the GLFW frame loop with a fixed-timestep @tick@, drawing each
 -- frame, until the window closes or @shouldQuit@ answers True.
 runLoop ::
   (MonadIO m) =>
   -- | Advance the simulation by one tick.
   Access m () ->
-  -- | Quit? Checked once per frame, after rendering.
+  -- | Draw one frame (e.g. 'Wyrdshaper.Engine.renderWithCamera').
+  Access m () ->
+  -- | Quit? Checked once per frame, after drawing.
   Access m Bool ->
   Access m ()
-runLoop tick shouldQuit = do
+runLoop tick draw shouldQuit = do
   accRef <- liftIO $ newIORef (0 :: Double)
   lastRef <- liftIO $ newIORef =<< liftIO now
   runAccessGLFW $ do
@@ -48,7 +50,7 @@ runLoop tick shouldQuit = do
         steps = floor (acc' * tickRate) :: Int
     liftIO $ writeIORef accRef (acc' - fromIntegral steps / tickRate)
     replicateM_ steps tick
-    render
+    draw
     shouldQuit
   where
     now = fromMaybe 0 <$> GLFW.getTime
