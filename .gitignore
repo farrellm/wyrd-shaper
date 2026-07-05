@@ -5,3 +5,6 @@ dist-newstyle/
 # Emacs
 \#*\#
 .\#*
+
+# Third party assets
+assets/
