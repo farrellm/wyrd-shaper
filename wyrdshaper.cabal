@@ -21,6 +21,7 @@ library
     exposed-modules:  Wyrdshaper
                       Wyrdshaper.Engine
                       Wyrdshaper.Loop
+                      Wyrdshaper.Spell
                       Wyrdshaper.Tilemap
     build-depends:    base ^>=4.21.2.0,
                       aztecs ==0.17.1,
