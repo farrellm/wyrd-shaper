@@ -219,9 +219,13 @@ Each milestone has a concrete "done when" so progress is checkable.
 - **M3 — Block editor.** In-game glyph editor over the core AST; save/load
   spells; Willpower program-size budget enforced.
   *Done when: a spell assembled in-game casts from a quick slot.*
-  *Shipped as*: a keyboard-driven editor (`E` in play) showing the spell as
-  indented glyph rows over a pure document model (`Glyph.hs`) — palette
-  hotkeys insert, arrows move cursor/field, `-`/`=` cycle values. The
+  *Shipped as*: a keyboard- and mouse-driven editor (`E` in play) showing
+  the spell as indented glyph rows over a pure document model (`Glyph.hs`).
+  Keyboard: palette hotkeys insert, arrows move cursor/field, `-`/`=` cycle
+  values. Mouse (Scratch-style): drag blocks from the palette or between
+  rows with a snap line at the nearest valid gap or hole, click a field to
+  pick its value from a dropdown, drag a block onto the palette to delete
+  its subtree; both input methods edit the same rows and stay in sync. The
   editable subset gives every block one child list (`if` is then-only for
   now), so a cursor path is a plain index list; the tier-2+ constructs
   (`if`, loops, `let`) are all present from the start rather than
@@ -259,9 +263,10 @@ Each milestone has a concrete "done when" so progress is checkable.
   Keep engine-facing code confined to the thin `Engine` module so any future
   migration stays cheap.
 - **In-game editor UX** (both glyph and text) is the biggest unknown. M3
-  shipped the first prototype (keyboard-driven rows, no mouse); expect to
-  iterate — drag/snap feel, wards at tier 4, and the M7 text editor are
-  still open questions.
+  shipped keyboard-driven rows, then grew Scratch-style mouse drag/snap,
+  dropdown field menus, and drag-to-palette deletion on the same document
+  model; expect to keep iterating — wards at tier 4 and the M7 text editor
+  are still open questions.
 - **Balance** of per-instruction mana costs, Willpower budgets, and backlash
   scaling will need sustained playtesting; keep the numbers in data, not
   code.

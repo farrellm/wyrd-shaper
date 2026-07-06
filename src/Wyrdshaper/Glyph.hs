@@ -18,14 +18,28 @@ module Wyrdshaper.Glyph
     RowKind (..),
     flatten,
 
+    -- * Insertion points (drag\/snap targets)
+    InsPoint (..),
+    insertionPoints,
+
     -- * Edits
+    nodeAt,
     insertAt,
     deleteAt,
     modifyAt,
+    moveNode,
 
     -- * Field editing
     fieldCount,
+    fieldOptions,
     cycleField,
+
+    -- * Display text
+    rowPieces,
+    verbText,
+    selText,
+    argText,
+    opText,
 
     -- * To and from the Wyrdtongue
     compile,
@@ -36,7 +50,9 @@ module Wyrdshaper.Glyph
   )
 where
 
-import Data.List (elemIndex)
+import Data.Char (toUpper)
+import Data.List (findIndex, unsnoc)
+import Data.Maybe (fromMaybe)
 import Wyrdshaper.Spell
   ( Expr (..),
     Name,
@@ -118,7 +134,62 @@ flatten = goList [] 0 []
                 EIf _ _ b -> rest scope b
                 ELet nm _ b -> rest (scope ++ [nm]) b
 
+-- * Insertion points
+
+-- | One place 'insertAt' may put a glyph: its path, the flat row index it
+-- sits above (@length (flatten sp)@ for the very end), and its depth. A
+-- hole's point /is/ its row ('ipAtHole') — the editor highlights the row
+-- rather than drawing a gap line. Several end-of-body points can share one
+-- 'ipBeforeRow'; they differ in 'ipDepth', which is how the drop pick
+-- disambiguates (Scratch's "how far right is the pointer").
+data InsPoint = InsPoint
+  { ipPath :: Path,
+    ipBeforeRow :: Int,
+    ipDepth :: Int,
+    ipAtHole :: Bool
+  }
+  deriving (Eq, Show)
+
+-- | Every insertion point of the document, in row order; the snap targets
+-- for a drag. Each child list of n children yields n+1 points; each empty
+-- list yields its single hole point.
+insertionPoints :: Spell -> [InsPoint]
+insertionPoints = snd . goL [] 0 0
+  where
+    -- returns (next flat row index, points for this list and below)
+    goL path depth i [] = (i + 1, [InsPoint (path ++ [0]) i depth True])
+    goL path depth i0 ns = go i0 0 ns
+      where
+        go i j [] = (i, [InsPoint (path ++ [j]) i depth False])
+        go i j (n : rest) =
+          let pt = InsPoint (path ++ [j]) i depth False
+              (i1, sub) = case n of
+                EInvoke _ _ -> (i + 1, [])
+                ERepeat _ b -> goL (path ++ [j]) (depth + 1) (i + 1) b
+                EIf _ _ b -> goL (path ++ [j]) (depth + 1) (i + 1) b
+                ELet _ _ b -> goL (path ++ [j]) (depth + 1) (i + 1) b
+              (i2, more) = go i1 (j + 1) rest
+           in (i2, pt : sub ++ more)
+
 -- * Edits
+
+nodeChildren :: ENode -> [ENode]
+nodeChildren n = case n of
+  EInvoke _ _ -> []
+  ERepeat _ b -> b
+  EIf _ _ b -> b
+  ELet _ _ b -> b
+
+-- | The node at a path, if the path names one.
+nodeAt :: Path -> Spell -> Maybe ENode
+nodeAt p sp = case p of
+  [] -> Nothing
+  [i] -> ix i sp
+  (i : rest) -> nodeAt rest . nodeChildren =<< ix i sp
+  where
+    ix i ns
+      | i >= 0, n : _ <- drop i ns = Just n
+      | otherwise = Nothing
 
 -- | Run an indexed rewrite on the child list containing the path's target.
 modList :: Path -> (Int -> [ENode] -> Maybe [ENode]) -> Spell -> Maybe Spell
@@ -126,16 +197,11 @@ modList [] _ _ = Nothing
 modList [i] f ns = f i ns
 modList (i : rest) f ns = case splitAt i ns of
   (before, n : after) -> do
-    b' <- modList rest f (children n)
+    b' <- modList rest f (nodeChildren n)
     n' <- withChildren n b'
     pure (before ++ n' : after)
   _ -> Nothing
   where
-    children n = case n of
-      EInvoke _ _ -> []
-      ERepeat _ b -> b
-      EIf _ _ b -> b
-      ELet _ _ b -> b
     withChildren n b = case n of
       EInvoke _ _ -> Nothing -- verbs have no child list to descend into
       ERepeat k _ -> Just (ERepeat k b)
@@ -161,6 +227,35 @@ modifyAt p f = modList p $ \i ns -> case splitAt i ns of
   (before, n : after) -> Just (before ++ f n : after)
   _ -> Nothing
 
+-- | Move the subtree at @src@ so it lands at insertion point @dst@, where
+-- @dst@ is expressed against the /pre-move/ document (as enumerated by
+-- 'insertionPoints'). Returns the landed path (so a cursor can follow) and
+-- the new document. 'Nothing' when @dst@ is inside @src@'s own subtree.
+--
+-- The delete happens first, so a destination that passes through @src@'s
+-- own list at a later index must shift down by one. Dropping on either gap
+-- adjacent to @src@ needs no special case: both resolve to reinserting at
+-- the original index — a no-op.
+moveNode :: Path -> Path -> Spell -> Maybe (Path, Spell)
+moveNode src dst sp = do
+  (srcInit, srcLast) <- unsnoc src
+  let k = length src
+      intoOwnSubtree = length dst > k && take k dst == src
+      adjust d
+        | take (k - 1) d == srcInit,
+          j : rest <- drop (k - 1) d,
+          j > srcLast =
+            take (k - 1) d ++ (j - 1) : rest
+        | otherwise = d
+  if intoOwnSubtree
+    then Nothing
+    else do
+      n <- nodeAt src sp
+      sp' <- deleteAt src sp
+      let dst' = adjust dst
+      sp'' <- insertAt dst' n sp'
+      pure (dst', sp'')
+
 -- * Field editing
 
 -- | How many Left\/Right-selectable fields a glyph has.
@@ -175,28 +270,34 @@ fieldCount n = case n of
 letNames :: [Name]
 letNames = ["t", "u", "v"]
 
--- | Step one field of a glyph forward (@dir = 1@) or back (@-1@): cycle
--- enumerated fields, clamp numeric ones. Out-of-range field indices leave
--- the glyph unchanged.
+-- | Every value one field of a glyph may take: display label plus the
+-- glyph with that value set. The single source of truth for the editor's
+-- dropdown menus and keyboard cycling alike — the current value is the
+-- option whose node equals the input. Out-of-range fields have no options.
+fieldOptions :: [Name] -> Int -> ENode -> [(String, ENode)]
+fieldOptions scope field n = case (n, field) of
+  (EInvoke _ a, 0) -> [(verbText v, EInvoke v a) | v <- [Bolt, Push, Kindle]]
+  (EInvoke v _, 1) ->
+    [ (argText a, EInvoke v a)
+      | a <- map ASel [TileAhead, NearestFoe, SelfSel] ++ map AVar scope
+    ]
+  (ERepeat _ b, 0) -> [(show k, ERepeat k b) | k <- [1 .. 9]]
+  (EIf _ t b, 0) -> [(opText op, EIf op t b) | op <- [Gt, Lt, Eq]]
+  (EIf op _ b, 1) -> [(show t, EIf op t b) | t <- [0 .. manaMax]]
+  (ELet _ sel b, 0) -> [(map toUpper nm, ELet nm sel b) | nm <- letNames]
+  (ELet nm _ b, 1) -> [(selText s, ELet nm s b) | s <- [NearestFoe, TileAhead, SelfSel]]
+  _ -> []
+
+-- | Step one field forward (@dir = 1@) or back (@-1@) through its
+-- 'fieldOptions', wrapping at the ends. An unrecognized current value
+-- (e.g. a var that fell out of scope) restarts at the first option;
+-- out-of-range field indices leave the glyph unchanged.
 cycleField :: [Name] -> Int -> Int -> ENode -> ENode
-cycleField scope field dir n = case (n, field) of
-  (EInvoke v a, 0) -> EInvoke (cycleIn [Bolt, Push, Kindle] v) a
-  (EInvoke v a, 1) -> EInvoke v (cycleIn args a)
+cycleField scope field dir n = case fieldOptions scope field n of
+  [] -> n
+  opts -> snd (opts !! ((i + dir) `mod` length opts))
     where
-      args = map ASel [TileAhead, NearestFoe, SelfSel] ++ map AVar scope
-  (ERepeat k b, 0) -> ERepeat (clampTo 1 9 (k + dir)) b
-  (EIf op t b, 0) -> EIf (cycleIn [Gt, Lt, Eq] op) t b
-  (EIf op t b, 1) -> EIf op (clampTo 0 manaMax (t + dir)) b
-  (ELet nm sel b, 0) -> ELet (cycleIn letNames nm) sel b
-  (ELet nm sel b, 1) -> ELet nm (cycleIn [NearestFoe, TileAhead, SelfSel] sel) b
-  _ -> n
-  where
-    cycleIn :: (Eq a) => [a] -> a -> a
-    cycleIn [] x = x
-    cycleIn xs@(x0 : _) x = case elemIndex x xs of
-      Just i -> xs !! ((i + dir) `mod` length xs)
-      Nothing -> x0 -- e.g. a var that fell out of scope: restart the cycle
-    clampTo lo hi = max lo . min hi
+      i = fromMaybe (-dir) (findIndex ((== n) . snd) opts)
 
 -- * To and from the Wyrdtongue
 
@@ -266,3 +367,38 @@ paletteEntries =
     ("IF", EIf Gt 2 []),
     ("LET", ELet "t" NearestFoe [])
   ]
+
+-- * Display text
+
+-- | A row's display pieces: 'Just' field pieces are selectable (the index
+-- matches 'fieldOptions'\/'cycleField' field numbering); 'Nothing' pieces
+-- are connectives. Field labels come from the same helpers 'fieldOptions'
+-- uses, so a menu's entries always read like the row itself.
+rowPieces :: ENode -> [(Maybe Int, String)]
+rowPieces n = case n of
+  EInvoke v a ->
+    (Just 0, verbText v)
+      : [(Nothing, "AT") | v /= Push]
+      ++ [(Just 1, argText a)]
+  ERepeat k _ -> [(Nothing, "REPEAT"), (Just 0, show k), (Nothing, "TIMES")]
+  EIf op t _ -> [(Nothing, "IF MANA"), (Just 0, opText op), (Just 1, show t)]
+  ELet nm sel _ ->
+    [(Nothing, "LET"), (Just 0, map toUpper nm), (Nothing, "="), (Just 1, selText sel)]
+
+verbText :: Verb -> String
+verbText v = case v of Bolt -> "BOLT"; Push -> "PUSH"; Kindle -> "KINDLE"
+
+selText :: Selector -> String
+selText s = case s of TileAhead -> "TILE AHEAD"; NearestFoe -> "NEAREST FOE"; SelfSel -> "SELF"
+
+argText :: Arg -> String
+argText a = case a of ASel s -> selText s; AVar nm -> map toUpper nm
+
+opText :: Op -> String
+opText op = case op of
+  Gt -> ">"
+  Lt -> "<"
+  Eq -> "="
+  Add -> "+"
+  Sub -> "-"
+  Mul -> "*"

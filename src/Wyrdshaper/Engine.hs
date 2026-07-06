@@ -18,6 +18,12 @@ module Wyrdshaper.Engine
     keyHeld,
     keyTapped,
     inputQuit,
+    mousePos,
+    mouseHeld,
+    mousePressed,
+    mouseReleased,
+    mouseWheel,
+    demoInput,
     module SDL.Input.Keyboard.Codes,
 
     -- * Drawing
@@ -108,12 +114,19 @@ withEngine title size act =
                   act (Gfx r win size textFont titleFont)
 
 -- | One frame's input: keys held now, keys newly pressed since the last
--- poll (key-repeat filtered out), and whether a quit was requested (window
--- close). Built once per frame and shared by every tick of that frame.
+-- poll (key-repeat filtered out), whether a quit was requested (window
+-- close), and the mouse snapshot (position in window\/UI screen space,
+-- left-button state and edges, wheel travel). Built once per frame and
+-- shared by every tick of that frame.
 data Input = Input
   { inHeld :: Scancode -> Bool,
     inTapped :: Set.Set Scancode,
-    inQuit :: Bool
+    inQuit :: Bool,
+    inMousePos :: V2 Int,
+    inMouseHeld :: Bool,
+    inMousePressed :: Bool,
+    inMouseReleased :: Bool,
+    inWheel :: Int
   }
 
 -- | Pump SDL events and snapshot the input state. Events must be pumped
@@ -122,6 +135,8 @@ pollInput :: (MonadIO m) => m Input
 pollInput = do
   payloads <- map SDL.eventPayload <$> SDL.pollEvents
   held <- SDL.getKeyboardState
+  P mp <- SDL.getAbsoluteMouseLocation
+  buttons <- SDL.getMouseButtons
   let tapped =
         Set.fromList
           [ SDL.keysymScancode (SDL.keyboardEventKeysym ked)
@@ -129,12 +144,35 @@ pollInput = do
               SDL.keyboardEventKeyMotion ked == SDL.Pressed,
               not (SDL.keyboardEventRepeat ked)
           ]
+      leftEdges =
+        [ SDL.mouseButtonEventMotion med
+          | SDL.MouseButtonEvent med <- payloads,
+            SDL.mouseButtonEventButton med == SDL.ButtonLeft
+        ]
+      wheel =
+        sum
+          [ flipSign (SDL.mouseWheelEventDirection wed) (fromIntegral wy)
+            | SDL.MouseWheelEvent wed <- payloads,
+              let V2 _ wy = SDL.mouseWheelEventPos wed
+          ]
+      flipSign d = case d of SDL.ScrollFlipped -> negate; _ -> id
   pure
     Input
       { inHeld = held,
         inTapped = tapped,
-        inQuit = SDL.QuitEvent `elem` payloads
+        inQuit = SDL.QuitEvent `elem` payloads,
+        inMousePos = fromIntegral <$> mp,
+        inMouseHeld = buttons SDL.ButtonLeft,
+        inMousePressed = SDL.Pressed `elem` leftEdges,
+        inMouseReleased = SDL.Released `elem` leftEdges,
+        inWheel = wheel
       }
+
+-- | A synthetic input snapshot (no keyboard, no quit, no wheel) for the
+-- headless demo driver, which has no real mouse to move: position, held,
+-- pressed edge, released edge.
+demoInput :: V2 Int -> Bool -> Bool -> Bool -> Input
+demoInput p h pr re = Input (const False) Set.empty False p h pr re 0
 
 -- | Is the key held this frame?
 keyHeld :: Scancode -> Input -> Bool
@@ -147,6 +185,27 @@ keyTapped sc = Set.member sc . inTapped
 -- | Was a window close requested this frame?
 inputQuit :: Input -> Bool
 inputQuit = inQuit
+
+-- | Mouse position in screen pixels (top-left origin — UI overlay space).
+mousePos :: Input -> V2 Int
+mousePos = inMousePos
+
+-- | Is the left button down now?
+mouseHeld :: Input -> Bool
+mouseHeld = inMouseHeld
+
+-- | Did the left button go down this frame? (Both edges can be true in
+-- one frame on a fast tap.)
+mousePressed :: Input -> Bool
+mousePressed = inMousePressed
+
+-- | Did the left button come up this frame?
+mouseReleased :: Input -> Bool
+mouseReleased = inMouseReleased
+
+-- | Vertical wheel travel this frame (positive = away from the user).
+mouseWheel :: Input -> Int
+mouseWheel = inWheel
 
 -- | An RGBA color with components in [0, 1].
 data Color = Color !Float !Float !Float !Float

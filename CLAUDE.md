@@ -15,14 +15,20 @@ from `assets/ui_pack/Fonts/` and fails at startup without them.
 
 - Build: `cabal build`
 - Run: `cabal run wyrdshaper` (needs a display; opens an SDL window)
-- Headless smoke test (no keyboard injection tools on this machine): start
-  `Xvfb :99`, run with `DISPLAY=:99 WYRD_DEMO=1` — the demo driver in
-  `Wyrdshaper.run` auto-casts the quick slots on a frame schedule, then runs
-  a full editor pass (opens slot 2 at ~7.5 s, bumps the volley count with a
-  field edit, commits through the keyboard path's `commitShell`, casts the
-  result at ~11 s) — and screenshot with `DISPLAY=:99 import -window root
-  shot.png`. Afterwards `spellbook.wyrd` holds the edited slot; delete it to
-  restore defaults.
+- Headless smoke test (no keyboard/mouse injection tools on this machine):
+  start `Xvfb :99`, run with `DISPLAY=:99 WYRD_DEMO=1`, screenshot with
+  `DISPLAY=:99 import -window root shot.png`. The demo driver in
+  `Wyrdshaper.run` auto-casts the quick slots on a frame schedule, runs a
+  keyboard-style editor pass (opens slot 2 ~7.5 s, field-edits the volley
+  count, commits, casts ~11 s), then a **mouse pass** on slot 3 (~12–17 s):
+  synthetic `Input`s (built with `Engine.demoInput`, coordinates derived
+  from the live `Editor.buildLayout`) are queued one per frame through the
+  real `frame` path — palette drag with snap line (~13.2 s screenshot),
+  dropdown pick, row move into a hole, drag-to-palette delete with red tint
+  (~16.2 s), commit, cast (~18 s). Each edit logs the buffer's `show` to
+  stderr (`grep 'demo editor'`) so runs are assertable without pixels.
+  Afterwards `spellbook.wyrd` holds the edited slots; delete it to restore
+  defaults.
 
 Toolchain: GHC 9.12.4, cabal 3.16, `GHC2024`, `-Wall` (keep the build
 warning-free).
@@ -56,15 +62,26 @@ warning-free).
 - `src/Wyrdshaper/Glyph.hs` — pure editor document model: the glyph subset
   (`ENode`; every block node has exactly one child list, so a cursor `Path`
   is `[Int]`), `flatten` to cursor rows, `insertAt`/`deleteAt`/`modifyAt`,
-  field cycling, and `compile`/`decompile` to/from the Spell AST.
+  `insertionPoints` (drag/snap targets), `moveNode` (subtree move with
+  post-delete index adjustment; refuses moves into the moved subtree),
+  `fieldOptions` (single source of truth for dropdown menus *and* keyboard
+  `-`/`=` cycling — numeric fields wrap, not clamp), display text
+  (`rowPieces`), and `compile`/`decompile` to/from the Spell AST.
   Repl-testable; this is where editor logic changes should be tested.
 - `src/Wyrdshaper/Spellbook.hs` — quick-slot spellbook: the default spells
   and save/load. Format: a header line + one derived-`Show`n `Stmt` per
   slot; loading falls back per slot (parse failure or over-Willpower) to
   that slot's default with a stderr warning.
-- `src/Wyrdshaper/Editor.hs` — the in-game glyph editor: `updateEditor` is
-  pure over `Input`; `drawEditor` paints the panel with
-  `drawText`/`fillUiRect`.
+- `src/Wyrdshaper/Editor.hs` — the in-game glyph editor, keyboard + mouse
+  (Scratch-style drag/snap, dropdown field menus, drag-to-palette delete).
+  All geometry is measured once per frame by `buildLayout` and consumed by
+  *both* `updateEditor` (hit-testing) and `drawEditor` (pixels) — never
+  compute a rect in one and not the other. `updateEditor` is pure given the
+  `Layout` and `Input`; handler precedence is the Esc story: open menu >
+  live drag > keyboard chain (so Esc closes/cancels innermost first). Drag
+  state machine: press → 4 px threshold → drag → drop/cancel; a release
+  lost off-window cancels. Drops resolve via the pure `dropTarget` (nearest
+  gap by y, ties by indent x), shared with the snap-line drawing.
 - `src/Wyrdshaper.hs` — game setup, tick systems, `draw`, and the `Shell`
   (mode + spellbook in an `IORef` owned by the loop closures — apecs
   `Global` stores can't join `AllComponents`, and it's meta-state, not
