@@ -327,7 +327,13 @@ applyVerb wv v args = case (v, args) of
     | otherwise -> Right [SpawnBolt (wvCaster wv) (velToward boltSpeed (V2 0 0) d)]
   (Bolt, [arg]) -> do
     aim <- targetPoint wv arg
-    let vel = velToward boltSpeed (wvCaster wv) aim
+    -- Tile targets aim tile-center to tile-center: a bolt at a grid cell
+    -- (e.g. TileAhead) flies exactly along the grid axis even when the
+    -- caster stands off-center in its tile.
+    let origin = case arg of
+          VTarget (TTile _) -> tileCenter (tileOf (wvCaster wv))
+          _ -> wvCaster wv
+        vel = velToward boltSpeed origin aim
     if vel == V2 0 0
       then Left (BadSpell "bolt with no direction")
       else Right [SpawnBolt (wvCaster wv) vel]

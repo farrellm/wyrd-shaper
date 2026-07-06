@@ -32,11 +32,15 @@ from `assets/ui_pack/Fonts/` and fails at startup without them.
   stderr (`grep 'demo editor'`) so runs are assertable without pixels.
   Then an **M4 combat pass** (~18–42 s): walk segments are held-key
   `Engine.demoKeysInput` frames (they reach the ticks through `injRef` — the
-  loop's tick closure otherwise sees only real input), the player steps to
-  the north door, channels kindle loops so the incoming chaser's contact
-  hits stagger them (red backlash wash ~21.5 s), kills the chaser and the
-  channeling hexer, marches east, dies to the far chaser (YOU DIED overlay
-  ~38 s), and restarts via an injected `R` tap. The game itself logs every
+  loop's tick closure otherwise sees only real input); when a walk's keys
+  release, snap-on-stop glides the player to the next tile center along the
+  last motion, so every scripted stop is tile-aligned (walk lengths only
+  need to reach anywhere short of the intended tile). The player steps to
+  the north door, channels kindle loops timed against the incoming chaser's
+  45-tick contact cycle so the hits stagger them (red backlash wash
+  ~21.5 s), kills the chaser and the channeling hexer, marches east, dies
+  to the far chaser (YOU DIED overlay ~32 s), and restarts via an injected
+  `R` tap. The game itself logs every
   beat to stderr (`grep 'combat:'`): player/enemy `cast fizzled (…),
   backlash N`, `player hit`, `enemy slain`, `enemy cast started`,
   `GAME OVER`, `restarted`; runs are frame-for-frame reproducible under
@@ -101,7 +105,11 @@ warning-free).
   player's components are re-`set` on the same entity id so `gamePlayer`
   stays valid), tick systems, `draw`, and the `Shell` (mode + spellbook in
   an `IORef` owned by the loop closures — apecs `Global` stores can't join
-  `AllComponents`, and it's meta-state, not simulation state). Combat: one
+  `AllComponents`, and it's meta-state, not simulation state). Movement is
+  free (3 px/tick) while keys are held; on release `tickInput` glides the
+  player to the next tile center along the last motion (`snapTarget` —
+  never backwards), so an idle player always sits on the grid and
+  `TileAhead` spells read predictably. Combat: one
   `tickCast` `cmapM_` advances every caster (player and hexers) under the
   same rules; every cast collapse — stagger, `NoTarget`, `OutOfMana`, … —
   routes through `fizzleCast`, which destroys `Casting` *first* (no
