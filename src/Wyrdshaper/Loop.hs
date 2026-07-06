@@ -26,23 +26,33 @@ maxFrameDelta = 0.25
 -- | Run the frame loop with a fixed-timestep @tick@, drawing each frame,
 -- until @shouldQuit@ answers True. Input is polled once per frame; every
 -- tick of that frame sees the same snapshot.
+--
+-- UI\/mode input must be handled in @frame@, never in @tick@: a frame can
+-- run zero or two ticks (vsync and the tick clock free-run against each
+-- other), so per-tick edge handling would drop or double-fire taps.
+-- @shouldQuit@ is answered before @frame@ each frame, so a key @frame@
+-- consumes (e.g. Escape closing an editor) cannot also quit.
 runLoop ::
   (MonadIO m) =>
+  -- | Handle a frame's UI\/mode input; runs once per frame, before ticks.
+  (Input -> m ()) ->
   -- | Advance the simulation by one tick.
   (Input -> m ()) ->
   -- | Draw one frame (must end by presenting it).
   m () ->
-  -- | Quit? Checked once per frame, after drawing.
+  -- | Quit? Checked once per frame, before anything else.
   (Input -> m Bool) ->
   m ()
-runLoop tick draw shouldQuit = go 0 =<< now
+runLoop frame tick draw shouldQuit = go 0 =<< now
   where
     go acc lastT = do
       input <- pollInput
-      t <- now
-      let acc' = min maxFrameDelta (acc + (t - lastT))
-          steps = floor (acc' * tickRate) :: Int
-      replicateM_ steps (tick input)
-      draw
       q <- shouldQuit input
-      unless q $ go (acc' - fromIntegral steps / tickRate) t
+      unless q $ do
+        frame input
+        t <- now
+        let acc' = min maxFrameDelta (acc + (t - lastT))
+            steps = floor (acc' * tickRate) :: Int
+        replicateM_ steps (tick input)
+        draw
+        go (acc' - fromIntegral steps / tickRate) t

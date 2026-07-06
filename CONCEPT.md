@@ -191,11 +191,14 @@ of time and let your programs fight for you.
   per-component store selection (`Map`, `Unique`, `Global`).
 - **Windowing, input, rendering**: [`sdl2`](https://hackage.haskell.org/package/sdl2)
   — window and renderer lifecycle, keyboard input, and immediate-mode 2D
-  drawing via the SDL renderer; `sdl2-ttf` for text (spell editor, UI) when
-  M3/M7 need it. All SDL use stays behind the thin `Engine` module.
+  drawing via the SDL renderer; `sdl2-ttf` for text (in use since M3 for the
+  glyph editor UI, rendering the pixel fonts from Franuka's UI pack — which
+  lives in the untracked `assets/` directory and is credited in
+  `CREDITS.md`). All SDL use stays behind the thin `Engine` module.
 - **Parsing**: `megaparsec` for the textual Wyrdtongue.
-- **Art**: placeholder colored quads and simple sprites until late; the
-  design does not depend on art quality.
+- **Art**: placeholder colored quads and simple sprites until late (plus the
+  third-party UI pack for fonts, and later menus/frames); the design does
+  not depend on art quality.
 
 ### Milestones
 
@@ -216,6 +219,20 @@ Each milestone has a concrete "done when" so progress is checkable.
 - **M3 — Block editor.** In-game glyph editor over the core AST; save/load
   spells; Willpower program-size budget enforced.
   *Done when: a spell assembled in-game casts from a quick slot.*
+  *Shipped as*: a keyboard- and mouse-driven editor (`E` in play) showing
+  the spell as indented glyph rows over a pure document model (`Glyph.hs`).
+  Keyboard: palette hotkeys insert, arrows move cursor/field, `-`/`=` cycle
+  values. Mouse (Scratch-style): drag blocks from the palette or between
+  rows with a snap line at the nearest valid gap or hole, click a field to
+  pick its value from a dropdown, drag a block onto the palette to delete
+  its subtree; both input methods edit the same rows and stay in sync. The
+  editable subset gives every block one child list (`if` is then-only for
+  now), so a cursor path is a plain index list; the tier-2+ constructs
+  (`if`, loops, `let`) are all present from the start rather than
+  level-gated — gating arrives with M9. The spellbook persists to
+  `spellbook.wyrd` via derived `Show`/`Read`, falling back per slot on bad
+  data; Willpower (`willpowerMax`, currently a flat 8) is enforced at
+  insert, commit, load, and cast.
 - **M4 — Combat & backlash.** Enemies with simple AI, damage, and the
   interruption/fizzle/backlash rules for both player and enemy casters.
   *Done when: you can lose — and a stagger mid-cast visibly hurts you.*
@@ -245,8 +262,11 @@ Each milestone has a concrete "done when" so progress is checkable.
 - **Engine churn already happened once** (aztecs/GLFW/OpenGL → apecs/SDL2).
   Keep engine-facing code confined to the thin `Engine` module so any future
   migration stays cheap.
-- **In-game editor UX** (both glyph and text) is the biggest unknown —
-  prototype it early inside M3 and be ready to iterate.
+- **In-game editor UX** (both glyph and text) is the biggest unknown. M3
+  shipped keyboard-driven rows, then grew Scratch-style mouse drag/snap,
+  dropdown field menus, and drag-to-palette deletion on the same document
+  model; expect to keep iterating — wards at tier 4 and the M7 text editor
+  are still open questions.
 - **Balance** of per-instruction mana costs, Willpower budgets, and backlash
   scaling will need sustained playtesting; keep the numbers in data, not
   code.
