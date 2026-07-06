@@ -10,8 +10,13 @@ module Wyrdshaper.World
     Casting (..),
     CastState (..),
     Projectile (..),
-    DummyHP (..),
+    Health (..),
     Burning (..),
+    Faction (..),
+    EnemyKind (..),
+    Enemy (..),
+    HitFlash (..),
+    Invuln (..),
 
     -- * World
     World,
@@ -36,43 +41,48 @@ newtype Position = Position (V2 Int)
 
 instance Component Position where type Storage Position = Map Position
 
--- | Current mana and the regen clock (ticks since the last point back).
--- Player-only.
-data Mana = Mana !Int !Int
+-- | Current mana, this caster's cap, and the regen clock (ticks since the
+-- last point back). On the player and on enemy casters.
+data Mana = Mana !Int !Int !Int
 
-instance Component Mana where type Storage Mana = Unique Mana
+instance Component Mana where type Storage Mana = Map Mana
 
 -- | Last nonzero movement direction (components in -1..1); aims 'TileAhead'
--- and slot-1 bolts. Player-only.
+-- and slot-1 bolts. On the player and on enemy casters.
 newtype Facing = Facing (V2 Int)
 
-instance Component Facing where type Storage Facing = Unique Facing
+instance Component Facing where type Storage Facing = Map Facing
 
--- | Present on the player while channeling a spell (which roots movement);
--- absent when idle. Player-only.
+-- | Present on a caster while channeling a spell (which roots movement);
+-- absent when idle. Player and enemy casters channel under the same rules.
 newtype Casting = Casting CastState
 
-instance Component Casting where type Storage Casting = Unique Casting
+instance Component Casting where type Storage Casting = Map Casting
 
 data CastState = CastState
   { castVM :: VM,
     -- | Ticks until the next VM instruction.
     castCooldown :: !Int,
-    -- | Instructions executed so far (HUD numerator).
+    -- | Instructions executed so far (HUD numerator; == mana committed).
     castSpent :: !Int,
     -- | 'Wyrdshaper.Spell.spellSize' of the program (HUD denominator).
-    castSize :: !Int
+    castSize :: !Int,
+    -- | Ticks between VM instructions for this caster (the player speaks
+    -- faster than a hexer; same rules, tunable tempo).
+    castPace :: !Int
   }
 
 -- | A bolt in flight: velocity (px\/tick) and remaining ticks to live.
+-- Bolts also carry their caster's 'Faction' — they only hit the other side.
 data Projectile = Projectile !(V2 Int) !Int
 
 instance Component Projectile where type Storage Projectile = Map Projectile
 
--- | A target dummy's remaining hit points.
-newtype DummyHP = DummyHP Int
+-- | A combatant's current and maximum hit points. On the player, enemies,
+-- and target dummies alike.
+data Health = Health !Int !Int
 
-instance Component DummyHP where type Storage DummyHP = Map DummyHP
+instance Component Health where type Storage Health = Map Health
 
 -- | A fire overlay: the tile alight and ticks of burn left. Burn entities
 -- carry no 'Position'; the tile coordinate is the position.
@@ -80,14 +90,63 @@ data Burning = Burning !(V2 Int) !Int
 
 instance Component Burning where type Storage Burning = Map Burning
 
-makeWorld "World" [''Position, ''Mana, ''Facing, ''Casting, ''Projectile, ''DummyHP, ''Burning]
+-- | Whose side an entity fights on; decides who hits whom. On combatants
+-- and on their bolts.
+data Faction = FPlayer | FEnemy
+  deriving (Eq)
+
+instance Component Faction where type Storage Faction = Map Faction
+
+data EnemyKind = Dummy | Chaser | Hexer
+  deriving (Eq)
+
+-- | An enemy: its kind and its action cooldown (ticks until the next
+-- contact hit for a 'Chaser', the next cast for a 'Hexer').
+data Enemy = Enemy !EnemyKind !Int
+
+instance Component Enemy where type Storage Enemy = Map Enemy
+
+-- | Ticks of hit-flash left; entities flash white when hurt, and the
+-- player's flash also drives the full-screen damage wash.
+newtype HitFlash = HitFlash Int
+
+instance Component HitFlash where type Storage HitFlash = Map HitFlash
+
+-- | Player i-frames: ticks of post-hit invulnerability left.
+newtype Invuln = Invuln Int
+
+instance Component Invuln where type Storage Invuln = Map Invuln
+
+makeWorld
+  "World"
+  [ ''Position,
+    ''Mana,
+    ''Facing,
+    ''Casting,
+    ''Projectile,
+    ''Health,
+    ''Burning,
+    ''Faction,
+    ''Enemy,
+    ''HitFlash,
+    ''Invuln
+  ]
 
 type System' a = SystemT World IO a
 
 -- | Every component in the world. 'destroy' only removes the components
 -- named in its Proxy, so full deletion must name them all; keep this in
--- sync with the 'makeWorld' list above.
-type AllComponents = (Position, Mana, Facing, Casting, Projectile, DummyHP, Burning)
+-- sync with the 'makeWorld' list above (nested because apecs tuple
+-- instances stop at 8 elements).
+type AllComponents =
+  ( Position,
+    Mana,
+    Facing,
+    Casting,
+    Projectile,
+    Health,
+    (Burning, Faction, Enemy, HitFlash, Invuln)
+  )
 
 -- | Fully delete an entity. The only way game code should despawn anything.
 destroyEntity :: Entity -> System' ()

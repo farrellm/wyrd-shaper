@@ -24,6 +24,8 @@ module Wyrdshaper.Engine
     mouseReleased,
     mouseWheel,
     demoInput,
+    demoKeysInput,
+    demoTapInput,
     module SDL.Input.Keyboard.Codes,
 
     -- * Drawing
@@ -173,6 +175,16 @@ pollInput = do
 -- pressed edge, released edge.
 demoInput :: V2 Int -> Bool -> Bool -> Bool -> Input
 demoInput p h pr re = Input (const False) Set.empty False p h pr re 0
+
+-- | A synthetic held-keys snapshot (no taps, no mouse) for the demo
+-- driver's walk segments.
+demoKeysInput :: [Scancode] -> Input
+demoKeysInput ks = Input (`elem` ks) Set.empty False (V2 0 0) False False False 0
+
+-- | A synthetic tapped-keys snapshot (nothing held, no mouse) for the demo
+-- driver's edge-triggered keys (like R to restart).
+demoTapInput :: [Scancode] -> Input
+demoTapInput ks = Input (const False) (Set.fromList ks) False (V2 0 0) False False False 0
 
 -- | Is the key held this frame?
 keyHeld :: Scancode -> Input -> Bool

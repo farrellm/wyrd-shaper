@@ -20,6 +20,9 @@ module Wyrdshaper.Spellbook
     fireboltSpell,
     volleySpell,
     brandRepelSpell,
+
+    -- * Enemy spells
+    hexerSpell,
   )
 where
 
@@ -56,6 +59,13 @@ brandRepelSpell =
           (Seq []),
         Invoke Kindle [Select TileAhead]
       ]
+
+-- | What a hexer channels: a two-bolt volley at its nearest foe (the
+-- player). Three instructions of slow enemy speech — a real window to
+-- interrupt. If the target vanishes mid-channel, 'NearestFoe' fizzles and
+-- the hexer eats its own backlash, same rules as the player.
+hexerSpell :: Stmt
+hexerSpell = Repeat (Lit (VNum 2)) (Invoke Bolt [Select NearestFoe])
 
 defaultSpellbook :: Spellbook
 defaultSpellbook = Spellbook [fireboltSpell, volleySpell, brandRepelSpell]

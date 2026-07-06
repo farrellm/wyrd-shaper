@@ -236,6 +236,20 @@ Each milestone has a concrete "done when" so progress is checkable.
 - **M4 — Combat & backlash.** Enemies with simple AI, damage, and the
   interruption/fizzle/backlash rules for both player and enemy casters.
   *Done when: you can lose — and a stagger mid-cast visibly hurts you.*
+  *Shipped as*: two enemy kinds on the overworld — melee **chasers** and
+  **hexers** that channel a bolt volley through the *same* VM/cast pipeline
+  as the player (slower `castPace`; the gold cast bar over their heads is
+  the interrupt telegraph) — plus generic `Health`/`Faction` components
+  (bolts carry their caster's faction; target dummies are just inert
+  enemies now). Any hit on a channeling caster staggers the cast, and every
+  collapse (stagger, no target, out of mana…) backlashes the caster for
+  `backlashDamage`, scaling with the mana already committed — backlash
+  deliberately bypasses the player's post-hit i-frames. Player death is a
+  `GameOver` mode (YOU DIED veil, `R` respawns via the same `spawnLevel`
+  as setup), not entity destruction. Feedback: white hit flash, i-frame
+  blink, a full-screen red wash sized to the flash, in-world HP pips, and
+  a red health bar in HUD slot 2. All numbers live in the Spell.hs
+  tunables block.
 - **M5 — Naming.** Familiarity-tracking components, insight events, name
   unlocks feeding the spell vocabulary (cost/power modifiers, name-gated
   verbs).

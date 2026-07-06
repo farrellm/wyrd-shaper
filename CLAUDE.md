@@ -4,8 +4,11 @@ Top-down action-adventure where magic is a programming language. Design,
 mechanics, and the milestone build plan live in `CONCEPT.md` — read it before
 starting a milestone. Current status: M0 (skeleton), M1 (tilemap, player
 movement + collision, camera follow), M2 (spell VM, mana, quick slots 1/2/3,
-target dummies, HUD bars), and M3 (in-game glyph editor on `E`, spellbook
-save/load to `spellbook.wyrd` in cwd, Willpower budget) done.
+target dummies, HUD bars), M3 (in-game glyph editor on `E`, spellbook
+save/load to `spellbook.wyrd` in cwd, Willpower budget), and M4 (enemies —
+chasers and channeling hexers — player health, faction-tagged bolts,
+stagger/fizzle/backlash for every caster, GameOver mode with `R` restart)
+done.
 
 The game needs the untracked `assets/` directory (gitignored, not
 redistributable — see `CREDITS.md`): `Engine.withEngine` loads the UI fonts
@@ -27,8 +30,18 @@ from `assets/ui_pack/Fonts/` and fails at startup without them.
   dropdown pick, row move into a hole, drag-to-palette delete with red tint
   (~16.2 s), commit, cast (~18 s). Each edit logs the buffer's `show` to
   stderr (`grep 'demo editor'`) so runs are assertable without pixels.
-  Afterwards `spellbook.wyrd` holds the edited slots; delete it to restore
-  defaults.
+  Then an **M4 combat pass** (~18–42 s): walk segments are held-key
+  `Engine.demoKeysInput` frames (they reach the ticks through `injRef` — the
+  loop's tick closure otherwise sees only real input), the player steps to
+  the north door, channels kindle loops so the incoming chaser's contact
+  hits stagger them (red backlash wash ~21.5 s), kills the chaser and the
+  channeling hexer, marches east, dies to the far chaser (YOU DIED overlay
+  ~38 s), and restarts via an injected `R` tap. The game itself logs every
+  beat to stderr (`grep 'combat:'`): player/enemy `cast fizzled (…),
+  backlash N`, `player hit`, `enemy slain`, `enemy cast started`,
+  `GAME OVER`, `restarted`; runs are frame-for-frame reproducible under
+  Xvfb. Afterwards `spellbook.wyrd` holds the edited slots; delete it to
+  restore defaults.
 
 Toolchain: GHC 9.12.4, cabal 3.16, `GHC2024`, `-Wall` (keep the build
 warning-free).
@@ -56,9 +69,11 @@ warning-free).
   collision changes in `cabal repl lib:wyrdshaper`, no window needed.
 - `src/Wyrdshaper/Spell.hs` — pure Wyrdtongue core: the spell AST, the
   small-step VM (`step` runs one instruction; the ECS side charges 1 mana
-  per call and paces calls every `ticksPerInstr` ticks), and the gameplay
-  tunables block (including `willpowerMax`). Takes a `WorldView` snapshot
-  in, emits `Effect`s out — repl-testable like Tilemap.
+  per call and paces calls every `castPace` ticks — `ticksPerInstr` for the
+  player, `enemyTicksPerInstr` for hexers), and the gameplay tunables block
+  (`willpowerMax`, all the M4 combat numbers, and `backlashDamage`: what a
+  collapsing cast costs its caster, scaling with mana committed). Takes a
+  `WorldView` snapshot in, emits `Effect`s out — repl-testable like Tilemap.
 - `src/Wyrdshaper/Glyph.hs` — pure editor document model: the glyph subset
   (`ENode`; every block node has exactly one child list, so a cursor `Path`
   is `[Int]`), `flatten` to cursor rows, `insertAt`/`deleteAt`/`modifyAt`,
@@ -82,13 +97,23 @@ warning-free).
   state machine: press → 4 px threshold → drag → drop/cancel; a release
   lost off-window cancels. Drops resolve via the pure `dropTarget` (nearest
   gap by y, ties by indent x), shared with the snap-line drawing.
-- `src/Wyrdshaper.hs` — game setup, tick systems, `draw`, and the `Shell`
-  (mode + spellbook in an `IORef` owned by the loop closures — apecs
-  `Global` stores can't join `AllComponents`, and it's meta-state, not
-  simulation state). While the editor is open the simulation is frozen (no
-  ticks). Escape quits only when playing; in the editor it cancels
-  (`runLoop` checks quit before `frame`, so one Escape can't do both).
-  `app/Main.hs` is a stub.
+- `src/Wyrdshaper.hs` — game setup (`spawnLevel`, shared with restart: the
+  player's components are re-`set` on the same entity id so `gamePlayer`
+  stays valid), tick systems, `draw`, and the `Shell` (mode + spellbook in
+  an `IORef` owned by the loop closures — apecs `Global` stores can't join
+  `AllComponents`, and it's meta-state, not simulation state). Combat: one
+  `tickCast` `cmapM_` advances every caster (player and hexers) under the
+  same rules; every cast collapse — stagger, `NoTarget`, `OutOfMana`, … —
+  routes through `fizzleCast`, which destroys `Casting` *first* (no
+  re-stagger) and applies `backlashDamage` via raw `hurt` (bypassing
+  i-frames: the stagger hit just granted some). `damageEntity` is the gated
+  path (player `Invuln`, stagger check reads `Maybe Casting` *before*
+  `hurt` — the hit may destroy the entity); bolts and `foeSnapshot` are
+  faction-filtered. While the editor is open or in `GameOver` the
+  simulation is frozen (no ticks; `frame` flips a dead player to `GameOver`
+  and handles the `R` restart). Escape quits when playing or dead; in the
+  editor it cancels (`runLoop` checks quit before `frame`, so one Escape
+  can't do both). `app/Main.hs` is a stub.
 
 ## Conventions
 
@@ -102,19 +127,24 @@ warning-free).
 - Entity positions are AABB centers (`Position`); collision boxes span the
   half-open interval [center − half, center + half).
 - Draw order is explicit and back-to-front in `Wyrdshaper.draw`: tiles,
-  player, dummies, bolts, fire, HUD; the editor panel (when open) draws on
-  top of it all, and `presentFrame` is called by the loop's draw closure,
-  not by `draw`.
+  player, enemies (with in-world HP/cast bars), bolts, fire, HUD, damage
+  wash; the editor panel or game-over veil (when applicable) draws on top
+  of it all, and `presentFrame` is called by the loop's draw closure, not
+  by `draw`.
 
 ## apecs / sdl2 notes (apecs 0.10, sdl2 2.5.6)
 
 - `destroy` removes only the components named in its `Proxy` — deleting an
   entity means naming the full tuple. Always use `World.destroyEntity`, and
-  when adding a component to `makeWorld`, add it to `AllComponents` too.
-- Player-only components (`Mana`, `Facing`, `Casting`) use `Unique` stores;
-  state that comes and goes is component presence (`Casting` while
-  channeling), read with `get e :: … (Maybe c)` — component removal works
-  fine in apecs.
+  when adding a component to `makeWorld`, add it to `AllComponents` too
+  (nested tuples: apecs instances stop at 8 elements). A leak there
+  surfaces as ghost state after a `GameOver` restart.
+- Every component uses a `Map` store (M4 moved `Mana`/`Facing`/`Casting`
+  off `Unique` so enemy casters share the player's machinery); state that
+  comes and goes is component presence (`Casting` while channeling,
+  `Invuln`/`HitFlash` timers), read with `get e :: … (Maybe c)` — component
+  removal works fine in apecs, and a non-`Maybe` `get` of an absent `Map`
+  component is a *runtime* crash the types won't catch.
 - In `cmap`/`cmapM_`/`cfold` tuples, put `Entity` last: member enumeration
   comes from the first component's store. Destroying the current entity
   inside `cmapM_` is safe (members are snapshotted first).

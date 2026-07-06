@@ -32,6 +32,9 @@ module Wyrdshaper.Spell
     StepResult (..),
     step,
 
+    -- * Geometry helpers
+    velToward,
+
     -- * Tunables
     willpowerMax,
     manaMax,
@@ -43,6 +46,24 @@ module Wyrdshaper.Spell
     dummyMaxHP,
     burnTicks,
     pushStrength,
+    playerMaxHP,
+    chaserHP,
+    hexerHP,
+    enemySpeed,
+    chaserAggro,
+    hexerAggro,
+    contactDamage,
+    contactCooldownTicks,
+    enemyManaMax,
+    enemyTicksPerInstr,
+    hexerRecastTicks,
+    staggerThreshold,
+    backlashBase,
+    backlashPerMana,
+    backlashDamage,
+    invulnTicks,
+    hitFlashTicks,
+    backlashFlashTicks,
   )
 where
 
@@ -75,6 +96,46 @@ dummyMaxHP, burnTicks, pushStrength :: Int
 dummyMaxHP = 3
 burnTicks = 300 -- how long a kindled tile stays alight
 pushStrength = 48 -- px of shove
+
+playerMaxHP, chaserHP, hexerHP :: Int
+playerMaxHP = 10
+chaserHP = 3
+hexerHP = 2
+
+enemySpeed, chaserAggro, hexerAggro :: Int
+enemySpeed = 2 -- px per tick; slower than the player's 3
+chaserAggro = 192 -- px (6 tiles); spawns must sit outside this of the start
+hexerAggro = 224 -- px (7 tiles)
+
+contactDamage, contactCooldownTicks :: Int
+contactDamage = 1
+contactCooldownTicks = 45 -- ticks between a chaser's contact hits
+
+enemyManaMax, enemyTicksPerInstr, hexerRecastTicks :: Int
+enemyManaMax = 6
+enemyTicksPerInstr = 20 -- slow speech: a 3-instruction volley is a ~1s window
+hexerRecastTicks = 150 -- ticks between a hexer's casts
+
+-- | Minimum damage in one hit that staggers (interrupts) a channeling
+-- caster. At 1, any hit staggers — player and enemy alike.
+staggerThreshold :: Int
+staggerThreshold = 1
+
+backlashBase, backlashPerMana :: Int
+backlashBase = 1
+backlashPerMana = 2 -- mana committed per extra point of backlash
+
+-- | Damage a collapsing spell deals its caster: a base bite plus one point
+-- per 'backlashPerMana' mana already committed (the ECS charges one mana per
+-- executed instruction, so instructions spent == mana committed). Big
+-- spells, big risks.
+backlashDamage :: Int -> Int
+backlashDamage spent = backlashBase + spent `div` backlashPerMana
+
+invulnTicks, hitFlashTicks, backlashFlashTicks :: Int
+invulnTicks = 45 -- player i-frames after a hit
+hitFlashTicks = 12 -- white blip on any hit
+backlashFlashTicks = 30 -- longer wash when a cast collapses on its caster
 
 -- * AST
 
@@ -178,7 +239,8 @@ data StepResult
     Continue VM [Effect]
   | -- | The spell finished with this instruction.
     Done [Effect]
-  | -- | Runtime error: the cast collapses (backlash damage arrives in M4).
+  | -- | Runtime error: the cast collapses and bites its caster for
+    -- 'backlashDamage' of the mana already committed.
     Fizzle CastError
   deriving (Show)
 
