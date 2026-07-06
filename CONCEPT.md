@@ -237,8 +237,8 @@ Each milestone has a concrete "done when" so progress is checkable.
   efficiency and upkeep; inscribing spells into world objects with triggers.
   *Done when: one puzzle is solvable only by binding, and an inscribed trap
   fires with the player standing idle.*
-- **M9 — Progression & polish.** Tier/level progression, save/load, audio,
-  balancing instruction costs, real art pass.
+- **M9 — Progression.** Tier/level progression.
+- **M10 — Polish.** Save/load, audio, balancing instruction costs, real art pass.
 
 ### Risks
 
