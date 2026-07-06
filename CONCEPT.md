@@ -186,13 +186,13 @@ of time and let your programs fight for you.
 ### Tech Stack
 
 - **Language**: Haskell, GHC2024, cabal.
-- **Engine**: [`aztecs`](https://hackage.haskell.org/package/aztecs) — a
-  modular game engine and archetype-based ECS with pure systems. Companion
-  packages from the [aztecs-hs](https://github.com/aztecs-hs) org:
-  - `aztecs-glfw` — windowing and input
-  - `aztecs-gl` — OpenGL rendering
-  - `aztecs-gl-text` — text rendering (spell editor, UI)
-  - `aztecs-transform`, `aztecs-hierarchy` — transforms and entity hierarchy
+- **ECS**: [`apecs`](https://hackage.haskell.org/package/apecs) — a fast,
+  mature entity-component-system with a monadic `System` API and
+  per-component store selection (`Map`, `Unique`, `Global`).
+- **Windowing, input, rendering**: [`sdl2`](https://hackage.haskell.org/package/sdl2)
+  — window and renderer lifecycle, keyboard input, and immediate-mode 2D
+  drawing via the SDL renderer; `sdl2-ttf` for text (spell editor, UI) when
+  M3/M7 need it. All SDL use stays behind the thin `Engine` module.
 - **Parsing**: `megaparsec` for the textual Wyrdtongue.
 - **Art**: placeholder colored quads and simple sprites until late; the
   design does not depend on art quality.
@@ -201,8 +201,8 @@ of time and let your programs fight for you.
 
 Each milestone has a concrete "done when" so progress is checkable.
 
-- **M0 — Skeleton.** Add dependencies; open a GLFW window; render a quad
-  moving under an aztecs system.
+- **M0 — Skeleton.** Add dependencies; open an SDL window; render a quad
+  moving under an apecs system.
   *Done when: a shape moves on screen at a stable tick rate.*
 - **M1 — Player & world.** Tilemap rendering, player movement with
   collision, camera follow.
@@ -230,7 +230,7 @@ Each milestone has a concrete "done when" so progress is checkable.
   completable dungeon whose puzzle requires a loop or ward.*
 - **M7 — Text language.** Megaparsec parser for the script superset
   (definitions, parameters, recursion, spells- and names-as-values)
-  targeting the same VM; in-game text editor via `aztecs-gl-text`.
+  targeting the same VM; in-game text editor via `sdl2-ttf`.
   *Done when: the recursive `chain` example above parses, casts, and can be
   round-tripped from an old glyph spell.*
 - **M8 — Bindings & inscription.** The link system with similarity-based
@@ -242,9 +242,9 @@ Each milestone has a concrete "done when" so progress is checkable.
 
 ### Risks
 
-- **`aztecs` is young (pre-1.0).** Pin versions and expect API churn between
-  releases; keep engine-facing code in a thin layer so migrations stay
-  cheap.
+- **Engine churn already happened once** (aztecs/GLFW/OpenGL → apecs/SDL2).
+  Keep engine-facing code confined to the thin `Engine` module so any future
+  migration stays cheap.
 - **In-game editor UX** (both glyph and text) is the biggest unknown —
   prototype it early inside M3 and be ready to iterate.
 - **Balance** of per-instruction mana costs, Willpower budgets, and backlash
