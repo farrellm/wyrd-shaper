@@ -19,14 +19,18 @@ common warnings
 library
     import:           warnings
     exposed-modules:  Wyrdshaper
+                      Wyrdshaper.Editor
                       Wyrdshaper.Engine
+                      Wyrdshaper.Glyph
                       Wyrdshaper.Loop
                       Wyrdshaper.Spell
+                      Wyrdshaper.Spellbook
                       Wyrdshaper.Tilemap
                       Wyrdshaper.World
     build-depends:    base ^>=4.21.2.0,
                       apecs ^>=0.10,
                       sdl2 ^>=2.5.5,
+                      sdl2-ttf ^>=2.1,
                       containers >=0.7,
                       linear >=1.22,
                       text >=2.0,

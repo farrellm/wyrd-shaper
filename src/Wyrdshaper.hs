@@ -5,15 +5,18 @@
 module Wyrdshaper (run) where
 
 import Apecs
-import Control.Monad (forM_)
-import Data.IORef (atomicModifyIORef', newIORef)
+import Control.Monad (forM_, when)
+import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (find)
 import Linear (V2 (..))
 import System.Environment (lookupEnv)
 import System.IO (hPutStrLn, stderr)
+import Wyrdshaper.Editor
 import Wyrdshaper.Engine
+import Wyrdshaper.Glyph (compile, cycleField, modifyAt)
 import Wyrdshaper.Loop
 import Wyrdshaper.Spell
+import Wyrdshaper.Spellbook
 import Wyrdshaper.Tilemap
 import Wyrdshaper.World
 
@@ -35,35 +38,25 @@ dummyHalf = V2 12 12
 boltHalf :: V2 Int
 boltHalf = V2 5 5
 
--- * Quick-slot spells (hardcoded until the M3 editor)
+-- * Shell state
 
--- | Slot 1: a bolt at the tile you face.
-fireboltSpell :: Stmt
-fireboltSpell = Invoke Bolt [Select TileAhead]
+-- | What the player is doing at the meta level. While 'Editing', the
+-- simulation is frozen: no ticks run.
+data Mode = Playing | Editing EditorState
 
--- | Slot 2: three bolts at the nearest dummy, re-aimed each iteration,
--- launching ticks apart.
-volleySpell :: Stmt
-volleySpell = Repeat (Lit (VNum 3)) (Invoke Bolt [Select NearestFoe])
+-- | Meta-state owned by the loop closures, not the ECS: the current mode
+-- and the spellbook. Lives in an 'IORef' (like the demo driver's tick
+-- counter) because apecs 'Apecs.Global' stores cannot join
+-- 'Wyrdshaper.World.AllComponents'.
+data Shell = Shell {shMode :: Mode, shBook :: Spellbook}
 
--- | Slot 3: bind the nearest dummy, shove it if mana allows, and kindle the
--- tile ahead — let\/seq\/if in one spell.
-brandRepelSpell :: Stmt
-brandRepelSpell =
-  Let "t" (Select NearestFoe) $
-    Seq
-      [ If
-          (BinOp Gt ManaLeft (Lit (VNum 2)))
-          (Invoke Push [Var "t"])
-          (Seq []),
-        Invoke Kindle [Select TileAhead]
-      ]
-
-quickSlot :: Input -> Maybe Stmt
-quickSlot input
-  | tapped Scancode1 = Just fireboltSpell
-  | tapped Scancode2 = Just volleySpell
-  | tapped Scancode3 = Just brandRepelSpell
+-- | The quick slot (if any) tapped this frame, resolved against the
+-- player's spellbook.
+quickSlot :: Spellbook -> Input -> Maybe Stmt
+quickSlot book input
+  | tapped Scancode1 = Just (slotSpell 0 book)
+  | tapped Scancode2 = Just (slotSpell 1 book)
+  | tapped Scancode3 = Just (slotSpell 2 book)
   | otherwise = Nothing
   where
     tapped k = keyTapped k input
@@ -73,6 +66,7 @@ quickSlot input
 run :: IO ()
 run = withEngine "WyrdShaper" (V2 windowW windowH) $ \gfx -> do
   w <- initWorld
+  book <- loadSpellbook spellbookPath
   runWith w $ do
     let (tm, start) = worldMap
     playerE <- newEntity (Position start, Mana manaMax 0, Facing (V2 0 (-1)))
@@ -82,29 +76,99 @@ run = withEngine "WyrdShaper" (V2 windowW windowH) $ \gfx -> do
     forM_ [V2 18 15, V2 10 13, V2 20 17] $ \txy ->
       newEntity_ (Position (tileCenter txy), DummyHP dummyMaxHP)
 
-    -- Headless smoke test: WYRD_DEMO=1 auto-casts the quick slots on a
-    -- schedule, for driving the game under Xvfb where no keyboard exists.
-    demoTick <- do
+    shellRef <- liftIO $ newIORef (Shell Playing book)
+
+    -- Headless smoke test: WYRD_DEMO=1 drives the game under Xvfb where no
+    -- keyboard exists: it casts the quick slots on a schedule, then runs a
+    -- whole editor pass — open a slot, edit it with glyph ops, commit
+    -- through the same path as the Return key, and cast the result.
+    -- Scheduled per frame (not per tick): ticks freeze while editing.
+    demoFrame <- do
       mDemo <- liftIO $ lookupEnv "WYRD_DEMO"
       case mDemo of
         Nothing -> pure (pure ())
         Just _ -> do
-          tickRef <- liftIO $ newIORef (0 :: Int)
-          let script = [(30, volleySpell), (210, brandRepelSpell), (360, fireboltSpell)]
+          frameRef <- liftIO $ newIORef (0 :: Int)
+          let castSlot k = do
+                sh <- liftIO $ readIORef shellRef
+                startCast game (slotSpell k (shBook sh))
+              openDemoEditor = liftIO $ do
+                sh <- liftIO $ readIORef shellRef
+                -- volley, with its count bumped 3 -> 4 by a field edit
+                let st = openEditor 1 (shBook sh)
+                    buf' = modifyAt [0] (cycleField [] 0 1) (edBuf st)
+                    st' = maybe st (\b -> st {edBuf = b}) buf'
+                writeIORef shellRef sh {shMode = Editing st'}
+              commitDemoEdit = do
+                sh <- liftIO $ readIORef shellRef
+                forM_ [st | Editing st <- [shMode sh]] $ \st ->
+                  forM_ (compile (edBuf st)) $ \stmt ->
+                    liftIO $ commitShell shellRef (edSlot st) stmt
+              script =
+                [ (30 :: Int, castSlot 1),
+                  (210, castSlot 2),
+                  (360, castSlot 0),
+                  (450, openDemoEditor),
+                  (600, commitDemoEdit),
+                  (650, castSlot 1)
+                ]
           pure $ do
-            n <- liftIO $ atomicModifyIORef' tickRef (\n -> (n + 1, n))
-            forM_ (find ((== n) . fst) script) $ \(_, s) -> startCast game s
+            n <- liftIO $ atomicModifyIORef' frameRef (\n -> (n + 1, n))
+            forM_ (find ((== n) . fst) script) snd
 
     runLoop
-      (\input -> demoTick >> tick game input)
-      (draw gfx game)
-      (\input -> pure (inputQuit input || keyTapped ScancodeEscape input))
+      (\input -> demoFrame >> frame game shellRef input)
+      ( \input -> do
+          sh <- liftIO $ readIORef shellRef
+          case shMode sh of
+            Editing _ -> pure () -- the world holds its breath
+            Playing -> tick game (shBook sh) input
+      )
+      ( do
+          draw gfx game
+          sh <- liftIO $ readIORef shellRef
+          forM_ [st | Editing st <- [shMode sh]] (drawEditor gfx)
+          presentFrame gfx
+      )
+      ( \input -> do
+          sh <- liftIO $ readIORef shellRef
+          let playing = case shMode sh of Playing -> True; Editing _ -> False
+          pure (inputQuit input || (playing && keyTapped ScancodeEscape input))
+      )
+
+-- | Once-per-frame UI input: opening, driving, and closing the editor.
+-- Runs off the frame, not the tick — see 'Wyrdshaper.Loop.runLoop'.
+frame :: Game -> IORef Shell -> Input -> System' ()
+frame g shellRef input = do
+  sh <- liftIO $ readIORef shellRef
+  case shMode sh of
+    Playing ->
+      when (keyTapped ScancodeE input) $ do
+        mCast <- get (gamePlayer g)
+        case (mCast :: Maybe Casting) of
+          Just _ -> pure () -- no leafing through the book mid-incantation
+          Nothing ->
+            liftIO $ writeIORef shellRef sh {shMode = Editing (openEditor 0 (shBook sh))}
+    Editing st -> case updateEditor input (shBook sh) st of
+      EdContinue st' -> liftIO $ writeIORef shellRef sh {shMode = Editing st'}
+      EdCancel -> liftIO $ writeIORef shellRef sh {shMode = Playing}
+      EdCommit slot stmt -> liftIO $ commitShell shellRef slot stmt
+
+-- | Land a finished spell: write it into the book, persist the book, and
+-- return to play. The one path a spell takes from editor to quick slot,
+-- keyboard- and demo-driven alike.
+commitShell :: IORef Shell -> Int -> Stmt -> IO ()
+commitShell shellRef slot stmt = do
+  sh <- readIORef shellRef
+  let book' = setSlot slot stmt (shBook sh)
+  saveSpellbook spellbookPath book'
+  writeIORef shellRef (Shell Playing book')
 
 -- * Tick systems
 
-tick :: Game -> Input -> System' ()
-tick g input = do
-  tickInput g input
+tick :: Game -> Spellbook -> Input -> System' ()
+tick g book input = do
+  tickInput g book input
   tickCast g
   tickProjectiles g
   tickBurning
@@ -112,8 +176,8 @@ tick g input = do
 
 -- | Movement and cast start. Channeling roots the player: no movement, no
 -- new casts.
-tickInput :: Game -> Input -> System' ()
-tickInput g input = do
+tickInput :: Game -> Spellbook -> Input -> System' ()
+tickInput g book input = do
   mCast <- get (gamePlayer g)
   case (mCast :: Maybe Casting) of
     Just _ -> pure ()
@@ -129,19 +193,24 @@ tickInput g input = do
         Position (moveAndCollide (gameMap g) playerHalf p (fmap (* speed) dir))
       forM_ [dir | dir /= V2 0 0] $ \d ->
         set (gamePlayer g) (Facing d)
-      forM_ (quickSlot input) (startCast g)
+      forM_ (quickSlot book input) (startCast g)
 
 -- | Begin channeling a spell (no-op guard against re-entry is the caller's
--- job; both entry points check for an existing cast).
+-- job; both entry points check for an existing cast). Refuses anything over
+-- the Willpower budget — the editor and loader enforce it too, but nothing
+-- may channel past it regardless of where the spell came from.
 startCast :: Game -> Stmt -> System' ()
-startCast g s =
-  set (gamePlayer g) . Casting $
-    CastState
-      { castVM = newVM s,
-        castCooldown = ticksPerInstr,
-        castSpent = 0,
-        castSize = spellSize s
-      }
+startCast g s
+  | spellSize s > willpowerMax =
+      liftIO $ hPutStrLn stderr ("cast refused: spell exceeds Willpower " ++ show willpowerMax)
+  | otherwise =
+      set (gamePlayer g) . Casting $
+        CastState
+          { castVM = newVM s,
+            castCooldown = ticksPerInstr,
+            castSpent = 0,
+            castSize = spellSize s
+          }
 
 -- | Advance a channeling spell: every 'ticksPerInstr' ticks, charge one
 -- mana, run one VM instruction against a fresh world snapshot, and apply
@@ -256,7 +325,8 @@ tickRegen = cmap $ \(Mana cur clock) ->
 
 -- | Render with the camera on the player, clamped to the map edges; HUD
 -- bars for mana and, while channeling, cast progress. Draw order is
--- explicit back-to-front: tiles, player, dummies, bolts, fire, HUD.
+-- explicit back-to-front: tiles, player, dummies, bolts, fire, HUD. The
+-- caller presents the frame (the editor panel, if open, draws on top).
 draw :: Gfx -> Game -> System' ()
 draw gfx g = do
   clearFrame gfx (Color 0.03 0.03 0.05 1)
@@ -284,7 +354,6 @@ draw gfx g = do
       1
       (fromIntegral (castSpent cs) / fromIntegral (max 1 (castSize cs)))
       (Color 0.95 0.8 0.3 1)
-  presentFrame gfx
 
 clampCamera :: Tilemap -> V2 Int -> V2 Int
 clampCamera tm (V2 x y) =

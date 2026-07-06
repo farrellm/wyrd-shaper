@@ -8,3 +8,6 @@ dist-newstyle/
 
 # Third party assets
 assets/
+
+# Local save data
+spellbook.wyrd

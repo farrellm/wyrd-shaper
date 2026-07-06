@@ -33,6 +33,7 @@ module Wyrdshaper.Spell
     step,
 
     -- * Tunables
+    willpowerMax,
     manaMax,
     manaRegenTicks,
     ticksPerInstr,
@@ -54,6 +55,11 @@ import Wyrdshaper.Tilemap (tileCenter, tileSize)
 
 -- Gameplay numbers live here as data, not scattered through code
 -- (CONCEPT.md: balance will need sustained tweaking).
+
+-- | Willpower caps 'spellSize' — how many glyphs the caster can hold in
+-- mind at once. Enforced by the M3 editor (and defensively at cast time).
+willpowerMax :: Int
+willpowerMax = 8
 
 manaMax, manaRegenTicks, ticksPerInstr :: Int
 manaMax = 20
@@ -78,19 +84,19 @@ type Name = String
 type FoeId = Int
 
 data Value = VNum Int | VDir (V2 Int) | VTarget Target
-  deriving (Eq, Show)
+  deriving (Eq, Show, Read)
 
 -- | A resolved target. Foes are held by identity, not position: positions
 -- are looked up again when a verb fires, so a 'Let'-bound foe that dies
 -- mid-spell is a runtime error ('TargetGone'), not a stale hit.
 data Target = TSelf | TFoe FoeId | TTile (V2 Int)
-  deriving (Eq, Show)
+  deriving (Eq, Show, Read)
 
 data Selector = SelfSel | NearestFoe | TileAhead
-  deriving (Eq, Show)
+  deriving (Eq, Show, Read)
 
 data Op = Add | Sub | Mul | Gt | Lt | Eq
-  deriving (Eq, Show)
+  deriving (Eq, Show, Read)
 
 data Expr
   = Lit Value
@@ -98,10 +104,10 @@ data Expr
   | Select Selector
   | ManaLeft
   | BinOp Op Expr Expr
-  deriving (Eq, Show)
+  deriving (Eq, Show, Read)
 
 data Verb = Bolt | Push | Kindle
-  deriving (Eq, Show)
+  deriving (Eq, Show, Read)
 
 data Stmt
   = Invoke Verb [Expr]
@@ -109,7 +115,7 @@ data Stmt
   | If Expr Stmt Stmt
   | Repeat Expr Stmt
   | Let Name Expr Stmt
-  deriving (Eq, Show)
+  deriving (Eq, Show, Read)
 
 -- | Static instruction count: the charged nodes of the program. ('Repeat'
 -- bodies count once, so a running cast can exceed this — it is a size, not

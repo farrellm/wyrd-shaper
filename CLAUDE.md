@@ -3,8 +3,13 @@
 Top-down action-adventure where magic is a programming language. Design,
 mechanics, and the milestone build plan live in `CONCEPT.md` — read it before
 starting a milestone. Current status: M0 (skeleton), M1 (tilemap, player
-movement + collision, camera follow), and M2 (spell VM, mana, quick slots
-1/2/3, target dummies, HUD bars) done.
+movement + collision, camera follow), M2 (spell VM, mana, quick slots 1/2/3,
+target dummies, HUD bars), and M3 (in-game glyph editor on `E`, spellbook
+save/load to `spellbook.wyrd` in cwd, Willpower budget) done.
+
+The game needs the untracked `assets/` directory (gitignored, not
+redistributable — see `CREDITS.md`): `Engine.withEngine` loads the UI fonts
+from `assets/ui_pack/Fonts/` and fails at startup without them.
 
 ## Commands
 
@@ -12,47 +17,77 @@ movement + collision, camera follow), and M2 (spell VM, mana, quick slots
 - Run: `cabal run wyrdshaper` (needs a display; opens an SDL window)
 - Headless smoke test (no keyboard injection tools on this machine): start
   `Xvfb :99`, run with `DISPLAY=:99 WYRD_DEMO=1` — the demo driver in
-  `Wyrdshaper.run` auto-casts the quick slots on a tick schedule — and
-  screenshot with `DISPLAY=:99 import -window root shot.png`.
+  `Wyrdshaper.run` auto-casts the quick slots on a frame schedule, then runs
+  a full editor pass (opens slot 2 at ~7.5 s, bumps the volley count with a
+  field edit, commits through the keyboard path's `commitShell`, casts the
+  result at ~11 s) — and screenshot with `DISPLAY=:99 import -window root
+  shot.png`. Afterwards `spellbook.wyrd` holds the edited slot; delete it to
+  restore defaults.
 
 Toolchain: GHC 9.12.4, cabal 3.16, `GHC2024`, `-Wall` (keep the build
 warning-free).
 
 ## Architecture
 
-- `src/Wyrdshaper/Engine.hs` — the *only* module that imports SDL: window
-  and renderer lifecycle, the per-frame `Input` snapshot, and immediate-mode
-  rect drawing (`fillWorldRect`, `drawHudBar`). Rendering is stateless —
-  `draw` repaints everything from game state each frame; visuals have no
-  entity lifecycle to manage.
+- `src/Wyrdshaper/Engine.hs` — the *only* module that imports SDL (sdl2-ttf's
+  `SDL.Font` included): window and renderer lifecycle, UI font loading, the
+  per-frame `Input` snapshot, immediate-mode rect drawing (`fillWorldRect`,
+  `drawHudBar`, `fillUiRect`), and text (`drawText`, `measureText` — textures
+  are created and destroyed per string per frame; cache here if a live HUD
+  ever needs lots of text). Rendering is stateless — `draw` repaints
+  everything from game state each frame; visuals have no entity lifecycle to
+  manage.
 - `src/Wyrdshaper/World.hs` — the apecs world: component types and stores,
   the `makeWorld` splice, and `destroyEntity`.
 - `src/Wyrdshaper/Loop.hs` — fixed-timestep loop (60 ticks/s). All gameplay
   (movement, the spell VM's per-tick instruction budget) advances in `tick`,
   never per-frame. Input is polled once per frame; every tick of that frame
-  sees the same snapshot.
+  sees the same snapshot. UI/mode edge input (editor keys) is handled in the
+  once-per-frame `frame` handler, **never** in `tick`: a frame can run zero
+  or two ticks, so per-tick edge handling drops or double-fires taps.
 - `src/Wyrdshaper/Tilemap.hs` — pure tile world: map parsing, solidity, AABB
   collision (`moveAndCollide`, per-axis pixel sweep). Pure module — test
   collision changes in `cabal repl lib:wyrdshaper`, no window needed.
 - `src/Wyrdshaper/Spell.hs` — pure Wyrdtongue core: the spell AST, the
   small-step VM (`step` runs one instruction; the ECS side charges 1 mana
   per call and paces calls every `ticksPerInstr` ticks), and the gameplay
-  tunables block. Takes a `WorldView` snapshot in, emits `Effect`s out —
-  repl-testable like Tilemap.
-- `src/Wyrdshaper.hs` — game setup, tick systems, and `draw`; `app/Main.hs`
-  is a stub.
+  tunables block (including `willpowerMax`). Takes a `WorldView` snapshot
+  in, emits `Effect`s out — repl-testable like Tilemap.
+- `src/Wyrdshaper/Glyph.hs` — pure editor document model: the glyph subset
+  (`ENode`; every block node has exactly one child list, so a cursor `Path`
+  is `[Int]`), `flatten` to cursor rows, `insertAt`/`deleteAt`/`modifyAt`,
+  field cycling, and `compile`/`decompile` to/from the Spell AST.
+  Repl-testable; this is where editor logic changes should be tested.
+- `src/Wyrdshaper/Spellbook.hs` — quick-slot spellbook: the default spells
+  and save/load. Format: a header line + one derived-`Show`n `Stmt` per
+  slot; loading falls back per slot (parse failure or over-Willpower) to
+  that slot's default with a stderr warning.
+- `src/Wyrdshaper/Editor.hs` — the in-game glyph editor: `updateEditor` is
+  pure over `Input`; `drawEditor` paints the panel with
+  `drawText`/`fillUiRect`.
+- `src/Wyrdshaper.hs` — game setup, tick systems, `draw`, and the `Shell`
+  (mode + spellbook in an `IORef` owned by the loop closures — apecs
+  `Global` stores can't join `AllComponents`, and it's meta-state, not
+  simulation state). While the editor is open the simulation is frozen (no
+  ticks). Escape quits only when playing; in the editor it cancels
+  (`runLoop` checks quit before `frame`, so one Escape can't do both).
+  `app/Main.hs` is a stub.
 
 ## Conventions
 
 - World coordinates are **pixels, origin bottom-left, y up**. Tilemap row 0
   is the bottom row; map source strings are top-first and reversed at parse.
   Tiles are 32 px. SDL screen space is top-left origin, y down — the flip
-  happens only inside `Engine.fillWorldRect`/`drawHudBar`; nothing else may
-  think in screen coordinates.
+  happens only inside `Engine.fillWorldRect`; world rendering never thinks
+  in screen coordinates. UI overlays (`drawHudBar`, `fillUiRect`,
+  `drawText`, i.e. the HUD and the editor panel) are the exception: they
+  take screen-space positions directly.
 - Entity positions are AABB centers (`Position`); collision boxes span the
   half-open interval [center − half, center + half).
 - Draw order is explicit and back-to-front in `Wyrdshaper.draw`: tiles,
-  player, dummies, bolts, fire, HUD.
+  player, dummies, bolts, fire, HUD; the editor panel (when open) draws on
+  top of it all, and `presentFrame` is called by the loop's draw closure,
+  not by `draw`.
 
 ## apecs / sdl2 notes (apecs 0.10, sdl2 2.5.6)
 
