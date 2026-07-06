@@ -194,19 +194,24 @@ run = withEngine "WyrdShaper" (V2 windowW windowH) $ \gfx -> do
                   (1020, castSlot 2),
                   -- M4 combat pass: step toward the north door; the chaser
                   -- charges in through it and the hexer opens up outside.
-                  (1100, walk 25 [ScancodeW]),
+                  -- Walk lengths are chosen so the snap-on-stop glide lands
+                  -- each stop on the tile center the beat was tuned around.
+                  (1100, walk 21 [ScancodeW]), -- 559 -> snaps to 560 (tile 17)
                   (1230, logHP "first blood"),
-                  -- channel kindle loops beside the hammering chaser: they
-                  -- do it no harm, so its next contact hit is sure to land
-                  -- mid-channel — stagger, backlash, red wash
-                  (1235, castSlot 2),
-                  (1270, castSlot 2),
+                  -- channel kindle loops beside the hammering chaser: its
+                  -- contact hits land every 45 ticks from ~1206, so the
+                  -- first two channels are staggered one instruction in
+                  -- (stagger, backlash, red wash) and the third completes
+                  -- in the clear window and kindles the doorway
+                  (1240, castSlot 2),
+                  (1285, castSlot 2),
                   (1305, castSlot 2),
-                  -- now put it down: a volley, firebolts as insurance
-                  (1345, castSlot 1),
-                  (1385, castSlot 0),
-                  (1410, castSlot 0),
-                  (1435, castSlot 0),
+                  -- a volley the 1341 contact hit is sure to stagger, then
+                  -- firebolts timed inside the clear window put it down
+                  (1336, castSlot 1),
+                  (1345, castSlot 0),
+                  (1360, castSlot 0),
+                  (1375, castSlot 0),
                   (1465, logHP "chaser down"),
                   -- out the door into the hexer's bolt line; volleys at the
                   -- nearest foe cut its channel short
@@ -215,8 +220,8 @@ run = withEngine "WyrdShaper" (V2 windowW windowH) $ \gfx -> do
                   (1590, castSlot 1),
                   (1650, logHP "north field cleared"),
                   -- the long march east: stand under the far chaser and lose
-                  (1680, walk 15 [ScancodeS]),
-                  (1710, walk 175 [ScancodeD]),
+                  (1680, walk 10 [ScancodeS]), -- 658 -> snaps to 656 (tile 20)
+                  (1710, walk 170 [ScancodeD]), -- 974 -> snaps to 976, the far chaser's column
                   (2380, logHP "the end"),
                   -- back from the dead through the real R-key path
                   (2430, push [demoTapInput [ScancodeR]]),
@@ -374,11 +379,33 @@ tickInput g book input = do
           -- crude diagonal compensation: 2px on both axes vs 3px on one
           speed = case dir of V2 x y | x /= 0 && y /= 0 -> 2; _ -> playerSpeed
       Position p <- get (gamePlayer g)
+      Facing f <- get (gamePlayer g)
+      let delta
+            | dir /= V2 0 0 = fmap (* speed) dir
+            -- No input: glide onto the grid, clamping the last step so the
+            -- glide lands exactly on a tile center without overshooting.
+            | otherwise =
+                fmap (\c -> signum c * min playerSpeed (abs c)) (snapTarget f p - p)
       set (gamePlayer g) $
-        Position (moveAndCollide (gameMap g) bodyHalf p (fmap (* speed) dir))
+        Position (moveAndCollide (gameMap g) bodyHalf p delta)
       forM_ [dir | dir /= V2 0 0] $ \d ->
         set (gamePlayer g) (Facing d)
       forM_ (quickSlot book input) (startCastAt (gamePlayer g) ticksPerInstr)
+
+-- | Where the player settles when movement input stops: per axis, the next
+-- tile center along the last motion direction — never behind, so stopping
+-- reads as carrying momentum forward, not hopping back. An axis that wasn't
+-- moving keeps its containing tile's center. A forward center blocked by a
+-- wall (the player walked flush into it) just leaves the glide stopped
+-- against the wall.
+snapTarget :: V2 Int -> V2 Int -> V2 Int
+snapTarget dir p = snapAxis <$> dir <*> p
+  where
+    half = tileSize `div` 2
+    snapAxis s x
+      | s > 0 = tileSize * ((x - half + tileSize - 1) `div` tileSize) + half
+      | s < 0 = tileSize * ((x - half) `div` tileSize) + half
+      | otherwise = tileSize * (x `div` tileSize) + half
 
 -- | Begin channeling a spell on any caster at its speaking pace (no-op
 -- guard against re-entry is the caller's job; every entry point checks for
