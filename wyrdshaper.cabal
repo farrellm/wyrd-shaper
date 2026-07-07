@@ -27,6 +27,7 @@ library
                       Wyrdshaper.Spellbook
                       Wyrdshaper.Tilemap
                       Wyrdshaper.World
+                      Wyrdshaper.Worldgen
     build-depends:    base ^>=4.21.2.0,
                       apecs ^>=0.10,
                       sdl2 ^>=2.5.5,

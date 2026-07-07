@@ -211,6 +211,23 @@ Each milestone has a concrete "done when" so progress is checkable.
   dungeons with locks keyed to language features.
   *Done when: a fresh seed produces an explorable overworld and a
   completable dungeon whose puzzle requires a loop or ward.*
+  *Shipped as*: a zero-dependency pure `Worldgen` module (splitmix64-style
+  coordinate hashing, value-noise fbm) that generates a finite 160x160
+  overworld — four biomes (forest/marsh/scrubland/mountain) with
+  biome-biased enemy scatter, the authored M1 map stamped whole at the
+  spawn so the M2-M4 demo stays frame-exact, and an always-carved road
+  from a gap in its south wall to a dungeon entrance, so connectivity
+  holds by construction for every seed — plus a 3x3-cell room-graph
+  dungeon (randomized-DFS spanning tree). The goal room hangs off a
+  guaranteed cut edge holding a locked door; it opens only while all four
+  antechamber torches burn at once, and the torch lit-window is tuned so
+  the intended key is a loop over the new `UNLIT TORCH` selector (which
+  re-resolves each iteration; over-looping collapses into the normal
+  NoTarget backlash). Wards remain M7, so the loop variant of the "done
+  when" is the one shipped. Seeds come from `WYRD_SEED` (logged every
+  run); stairs tiles swap levels, the door unlock rewrites the mutable
+  level tilemap, and dungeon completability and overworld connectivity
+  are pure repl-checkable properties (`dungeonOK`/`overworldOK`).
 - **M6 — Text language.** Megaparsec parser for the script superset
   (definitions, parameters, recursion, spells-as-values) targeting the same
   VM; in-game text editor via `sdl2-ttf`.

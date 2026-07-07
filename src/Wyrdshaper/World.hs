@@ -17,6 +17,7 @@ module Wyrdshaper.World
     Enemy (..),
     HitFlash (..),
     Invuln (..),
+    Torch (..),
 
     -- * World
     World,
@@ -25,14 +26,18 @@ module Wyrdshaper.World
     destroyEntity,
 
     -- * Game context
+    Place (..),
+    Level (..),
     Game (..),
   )
 where
 
 import Apecs
+import Data.IORef (IORef)
 import Linear (V2)
 import Wyrdshaper.Spell (VM)
 import Wyrdshaper.Tilemap (Tilemap)
+import Wyrdshaper.Worldgen (Dungeon, Overworld)
 
 -- | An entity's pixel position: the center of its AABB, origin bottom-left,
 -- y up (the world convention; the flip to SDL screen space happens in
@@ -117,6 +122,13 @@ newtype Invuln = Invuln Int
 
 instance Component Invuln where type Storage Invuln = Map Invuln
 
+-- | A dungeon torch: 0 is unlit, otherwise ticks of flame left. Torch
+-- entities carry a 'Position' (their tile's center), so level teardowns
+-- sweep them up with everything else.
+newtype Torch = Torch Int
+
+instance Component Torch where type Storage Torch = Map Torch
+
 makeWorld
   "World"
   [ ''Position,
@@ -129,7 +141,8 @@ makeWorld
     ''Faction,
     ''Enemy,
     ''HitFlash,
-    ''Invuln
+    ''Invuln,
+    ''Torch
   ]
 
 type System' a = SystemT World IO a
@@ -145,15 +158,35 @@ type AllComponents =
     Casting,
     Projectile,
     Health,
-    (Burning, Faction, Enemy, HitFlash, Invuln)
+    (Burning, Faction, Enemy, HitFlash, Invuln, Torch)
   )
 
 -- | Fully delete an entity. The only way game code should despawn anything.
 destroyEntity :: Entity -> System' ()
 destroyEntity e = destroy e (Proxy @AllComponents)
 
--- | Everything the systems need each tick beyond the world itself.
+data Place = InOverworld | InDungeon
+  deriving (Eq)
+
+-- | The level the player is standing in: which place, its tilemap (a
+-- mutable copy of the generated one — the puzzle door is unlocked by
+-- rewriting a tile here), and the dungeon's puzzle latches. Entering a
+-- level resets this from the cached generation results, so re-entry
+-- regenerates-from-seed for free (and re-locks the door — an accepted M5
+-- simplification).
+data Level = Level
+  { lvPlace :: Place,
+    lvMap :: Tilemap,
+    lvDoorOpen :: Bool,
+    lvGoalDone :: Bool
+  }
+
+-- | Everything the systems need each tick beyond the world itself. The
+-- generated overworld and dungeon are immutable per run; only 'gameLevel'
+-- changes (owned by the loop closures, like the 'Shell').
 data Game = Game
-  { gameMap :: Tilemap,
-    gamePlayer :: Entity
+  { gamePlayer :: Entity,
+    gameOverworld :: Overworld,
+    gameDungeon :: Dungeon,
+    gameLevel :: IORef Level
   }
