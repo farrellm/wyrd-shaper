@@ -19,8 +19,14 @@ from `assets/ui_pack/Fonts/` and fails at startup without them.
 - Build: `cabal build`
 - Run: `cabal run wyrdshaper` (needs a display; opens an SDL window)
 - Headless smoke test (no keyboard/mouse injection tools on this machine):
-  start `Xvfb :99`, run with `DISPLAY=:99 WYRD_DEMO=1`, screenshot with
-  `DISPLAY=:99 import -window root shot.png`. The demo driver in
+
+  ```bash
+  Xvfb :99 & DISPLAY=:99 WYRD_DEMO=1 cabal run wyrdshaper 2>demo.log
+  DISPLAY=:99 import -window root shot.png   # screenshot mid-run
+  grep -E 'demo editor|combat:' demo.log     # assert the run
+  ```
+
+  The demo driver in
   `Wyrdshaper.run` auto-casts the quick slots on a frame schedule, runs a
   keyboard-style editor pass (opens slot 2 ~7.5 s, field-edits the volley
   count, commits, casts ~11 s), then a **mouse pass** on slot 3 (~12–17 s):
