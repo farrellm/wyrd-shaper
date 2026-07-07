@@ -1,26 +1,31 @@
--- | WyrdShaper — M4: combat and backlash. Quick slots 1\/2\/3 channel
--- spells over several ticks; chasers charge and hexers channel volleys
--- under the same casting rules as the player; any hit staggers a channel
--- and every collapsed cast backlashes its caster in proportion to the mana
--- already committed. You can lose (and press R about it).
+-- | WyrdShaper — M5: procgen. A seed speaks the whole world: a noise-biome
+-- overworld with the hand-authored start area stamped in whole, a road to
+-- a sunken dungeon, and a room-graph dungeon whose locked door demands all
+-- four antechamber torches burn at once — a puzzle whose intended key is a
+-- loop (@REPEAT 4 { KINDLE UNLIT TORCH }@), because the unlit-torch
+-- selector re-resolves every iteration. Combat, backlash, and the M4 rules
+-- carry over unchanged; stairs swap levels, and dying anywhere restarts on
+-- the overworld.
 module Wyrdshaper (run) where
 
 import Apecs
-import Control.Monad (forM_, when)
+import Control.Monad (forM_, unless, when)
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (find)
 import Data.Maybe (fromMaybe)
 import Linear (V2 (..), quadrance)
 import System.Environment (lookupEnv)
 import System.IO (hPutStrLn, stderr)
+import Text.Read (readMaybe)
 import Wyrdshaper.Editor
 import Wyrdshaper.Engine
-import Wyrdshaper.Glyph (compile, cycleField, ipPath, modifyAt)
+import Wyrdshaper.Glyph (Arg (..), ENode (..), compile, cycleField, ipPath, modifyAt)
 import Wyrdshaper.Loop
 import Wyrdshaper.Spell
 import Wyrdshaper.Spellbook
 import Wyrdshaper.Tilemap
 import Wyrdshaper.World
+import Wyrdshaper.Worldgen
 
 windowW, windowH :: Int
 windowW = 800
@@ -63,14 +68,44 @@ quickSlot book input
 
 -- * Setup
 
+-- | The seed every WYRD_DEMO run generates from: the demo's walk segments
+-- are tuned frame-exactly against this world.
+demoSeed :: Seed
+demoSeed = 2026
+
+-- | WYRD_DEMO forces 'demoSeed'; otherwise WYRD_SEED picks the world, and
+-- absent both the SDL clock supplies one. Always logged, so any run can be
+-- reproduced.
+resolveSeed :: IO Seed
+resolveSeed = do
+  mDemo <- lookupEnv "WYRD_DEMO"
+  mSeed <- lookupEnv "WYRD_SEED"
+  seed <- case (mDemo, mSeed >>= readMaybe) of
+    (Just _, _) -> pure demoSeed
+    (_, Just s) -> pure s
+    _ -> round . (* 1e9) <$> now
+  hPutStrLn stderr ("worldgen: seed " ++ show seed)
+  pure seed
+
 run :: IO ()
 run = withEngine "WyrdShaper" (V2 windowW windowH) $ \gfx -> do
   w <- initWorld
   book <- loadSpellbook spellbookPath
+  seed <- resolveSeed
+  let overworld = generateOverworld (mix64 (seed + 1))
+      dungeon = generateDungeon (mix64 (seed + 2))
   runWith w $ do
-    let (tm, _) = worldMap
     playerE <- newEntity (FPlayer)
-    let game = Game {gameMap = tm, gamePlayer = playerE}
+    levelRef <-
+      liftIO . newIORef $
+        Level InOverworld (owMap overworld) False False
+    let game =
+          Game
+            { gamePlayer = playerE,
+              gameOverworld = overworld,
+              gameDungeon = dungeon,
+              gameLevel = levelRef
+            }
     spawnLevel game
 
     shellRef <- liftIO $ newIORef (Shell Playing book)
@@ -104,6 +139,21 @@ run = withEngine "WyrdShaper" (V2 windowW windowH) $ \gfx -> do
                 Health hp maxHp <- get (gamePlayer game)
                 liftIO . hPutStrLn stderr $
                   "demo combat [" ++ tag ++ "]: hp " ++ show hp ++ "/" ++ show maxHp
+              logPos tag = do
+                Position p <- get (gamePlayer game)
+                liftIO . hPutStrLn stderr $
+                  "demo pos [" ++ tag ++ "]: tile " ++ show (fmap (`div` tileSize) p) ++ " px " ++ show p
+              -- Hold a direction long enough to land 1-4 px short of the
+              -- t-th tile center ahead; the snap-on-stop glide finishes the
+              -- step, so every leg ends dead on a tile center.
+              legFrames t = (tileSize * t - 2) `div` 3
+              -- A run of straight legs starting at a frame: one walk per
+              -- leg, the next scheduled after the previous plus glide room.
+              walkPlan f0 lgs = snd (foldl planLeg (f0, []) lgs)
+                where
+                  planLeg (f, acc) (ks, t) =
+                    let n = legFrames t
+                     in (f + n + 12, acc ++ [(f, walk n ks)])
               openDemoEditor slot editBuf = liftIO $ do
                 sh <- liftIO $ readIORef shellRef
                 let st = openEditor slot (shBook sh)
@@ -227,6 +277,81 @@ run = withEngine "WyrdShaper" (V2 windowW windowH) $ \gfx -> do
                   (2430, push [demoTapInput [ScancodeR]]),
                   (2480, logHP "after restart")
                 ]
+                  ++ m5Script
+
+              -- M5 pass (~2560-5600): write the torch spell, march down
+              -- the road to the dungeon, bounce out and back through the
+              -- stairs, wind through the room graph to the antechamber,
+              -- light all four torches with one looped cast (the door
+              -- grinds open), over-loop once to eat the NoTarget backlash,
+              -- and walk through the door to the shrine. Leg lists are
+              -- read off the demoSeed maps (scratchpad Legs.hs method);
+              -- retune them if any worldgen constant changes.
+              m5Script =
+                [ (2560 :: Int, openDemoEditor 2 (const (Just [ERepeat 4 [EInvoke Kindle (ASel UnlitTorch)]]))),
+                  (2575, logBuf "m5 torch spell"),
+                  (2600, commitDemoEdit)
+                ]
+                  -- out the start room, around the interior box, through
+                  -- the south gap, then the road's two legs onto the
+                  -- entrance stairs (the last leg crosses onto them).
+                  ++ walkPlan
+                    2650
+                    [ ([ScancodeS], 5),
+                      ([ScancodeD], 13),
+                      ([ScancodeS], 9),
+                      ([ScancodeA], 3),
+                      ([ScancodeS], 42),
+                      ([ScancodeD], 37)
+                    ]
+                  ++ [ -- The stairs-crossing leg can leave residual held
+                       -- frames after the transition (frame/tick drift), so
+                       -- the landing tile varies; walking into the entry
+                       -- room's east wall clamps every variant to the same
+                       -- pinned spot before anything is tuned from it.
+                       (3880, walk 40 [ScancodeD]),
+                       (3930, logPos "dungeon entry"),
+                       -- deliberate stair bounce from the normalized spot:
+                       -- out to the overworld beside the entrance, and the
+                       -- westward glide carries us right back down — both
+                       -- transitions exercised, and enterDungeon's exact
+                       -- placement re-centers us on the entry tile.
+                       (3945, walk 45 [ScancodeA]),
+                       (4010, logPos "after stair bounce")
+                     ]
+                  -- entry room to the torch antechamber, the long way the
+                  -- room tree winds (the first leg steps north off the
+                  -- stairs row before heading west past them).
+                  ++ walkPlan
+                    4030
+                    [ ([ScancodeW], 1),
+                      ([ScancodeA], 2),
+                      ([ScancodeW], 2),
+                      ([ScancodeA], 13),
+                      ([ScancodeW], 14),
+                      ([ScancodeA], 3),
+                      ([ScancodeW], 10),
+                      ([ScancodeD], 7),
+                      ([ScancodeW], 3),
+                      ([ScancodeD], 12),
+                      ([ScancodeS], 12),
+                      ([ScancodeD], 1),
+                      ([ScancodeS], 3),
+                      ([ScancodeD], 17),
+                      ([ScancodeW], 1)
+                    ]
+                  ++ [ (5280, logPos "antechamber"),
+                       (5290, castSlot 2), -- REPEAT 4 KINDLE UNLIT TORCH
+                       (5370, castSlot 2) -- every torch burning: backlash
+                     ]
+                  -- through the opened door to the shrine.
+                  ++ walkPlan
+                    5420
+                    [ ([ScancodeW], 15),
+                      ([ScancodeD], 1),
+                      ([ScancodeW], 2)
+                    ]
+                  ++ [(5660, logHP "the wyrd is shaped")]
           pure $ do
             n <- liftIO $ atomicModifyIORef' frameRef (\n -> (n + 1, n))
             forM_ (find ((== n) . fst) script) snd
@@ -272,40 +397,100 @@ run = withEngine "WyrdShaper" (V2 windowW windowH) $ \gfx -> do
           pure (inputQuit input || (escQuits && keyTapped ScancodeEscape input))
       )
 
--- | Populate (or repopulate) the level: the player's components are re-'set'
--- on the same entity id ('gamePlayer' must stay valid across restarts), and
--- the start room's dummies plus the overworld enemies are spawned fresh.
+-- | The tilemap the player is currently standing in.
+curMap :: Game -> System' Tilemap
+curMap g = lvMap <$> liftIO (readIORef (gameLevel g))
+
+-- | Populate (or repopulate) the overworld: the player's components are
+-- re-'set' on the same entity id ('gamePlayer' must stay valid across
+-- restarts), and the authored start area's dummies and foes — at their
+-- stamped positions — plus the biome scatter are spawned fresh.
 spawnLevel :: Game -> System' ()
 spawnLevel g = do
-  let (_, start) = worldMap
+  let ow = gameOverworld g
+  liftIO . writeIORef (gameLevel g) $
+    Level InOverworld (owMap ow) False False
   set (gamePlayer g) $
-    ( Position start,
+    ( Position (owStart ow),
       Mana manaMax manaMax 0,
       Facing (V2 0 (-1)),
       Health playerMaxHP playerMaxHP,
       FPlayer
     )
+  spawnOverworldFoes g
+
+-- | The overworld's population, shared by fresh spawns, restarts, and
+-- returns from the dungeon (which reset the level but not the player).
+spawnOverworldFoes :: Game -> System' ()
+spawnOverworldFoes g = do
+  let ow = gameOverworld g
+      stamped txy = owStampOrigin ow + txy
 
   -- Target dummies on open tiles of the starting room.
   forM_ [V2 18 15, V2 10 13, V2 20 17] $ \txy ->
-    newEntity_ (Position (tileCenter txy), Health dummyMaxHP dummyMaxHP, FEnemy, Enemy Dummy 0)
+    newEntity_ (Position (tileCenter (stamped txy)), Health dummyMaxHP dummyMaxHP, FEnemy, Enemy Dummy 0)
 
   -- Enemies north of the start room, all outside aggro range of the start
   -- tile so the start room stays a safe workshop until the player leaves.
-  spawnFoe Chaser chaserHP (V2 14 23)
-  spawnFoe Hexer hexerHP (V2 18 22)
-  spawnFoe Chaser chaserHP (V2 30 25)
-  where
-    spawnFoe kind hp txy = do
-      e <-
-        newEntity
-          ( Position (tileCenter txy),
-            Health hp hp,
-            FEnemy,
-            Enemy kind 0,
-            Facing (V2 0 (-1))
-          )
-      when (kind == Hexer) $ set e (Mana enemyManaMax enemyManaMax 0)
+  spawnFoe Chaser chaserHP (stamped (V2 14 23))
+  spawnFoe Hexer hexerHP (stamped (V2 18 22))
+  spawnFoe Chaser chaserHP (stamped (V2 30 25))
+
+  -- The seed's biome scatter, everywhere the stamp's calm doesn't reach.
+  forM_ (owSpawns ow) $ \(kind, txy) -> case kind of
+    SpawnChaser -> spawnFoe Chaser chaserHP txy
+    SpawnHexer -> spawnFoe Hexer hexerHP txy
+
+-- | Clear a level's population for a transition: every positioned entity
+-- except the player, plus the positionless fires. Any channel the player
+-- somehow carries across dies quietly (movement is rooted while casting,
+-- so stepping onto stairs mid-cast shouldn't be possible — this is a belt
+-- for that suspender).
+levelTeardown :: Game -> System' ()
+levelTeardown g = do
+  cmapM_ $ \(Position _, e) -> when (e /= gamePlayer g) $ destroyEntity e
+  cmapM_ $ \(Burning _ _, e) -> destroyEntity e
+  destroy (gamePlayer g) (Proxy @Casting)
+
+-- | Step onto 'StairsDown': trade the overworld for the dungeon. The
+-- player keeps HP, mana, and facing — only the ground changes.
+enterDungeon :: Game -> System' ()
+enterDungeon g = do
+  levelTeardown g
+  let dg = gameDungeon g
+  liftIO . writeIORef (gameLevel g) $ Level InDungeon (dgMap dg) False False
+  set (gamePlayer g) (Position (tileCenter (dgEntry dg)))
+  forM_ (dgTorches dg) $ \txy ->
+    newEntity_ (Position (tileCenter txy), Torch 0)
+  forM_ (dgSpawns dg) $ \(kind, txy) -> case kind of
+    SpawnChaser -> spawnFoe Chaser chaserHP txy
+    SpawnHexer -> spawnFoe Hexer hexerHP txy
+  liftIO $ hPutStrLn stderr "dungeon: entered the dungeon"
+
+-- | Step onto 'StairsUp': back to daylight, beside the entrance. The
+-- overworld's population respawns from the seed (regenerate-from-seed;
+-- nothing out here persists), and re-entering the dungeon later re-locks
+-- the door the same way.
+exitDungeon :: Game -> System' ()
+exitDungeon g = do
+  levelTeardown g
+  let ow = gameOverworld g
+  liftIO . writeIORef (gameLevel g) $ Level InOverworld (owMap ow) False False
+  set (gamePlayer g) (Position (tileCenter (owEntrance ow + V2 1 0)))
+  spawnOverworldFoes g
+  liftIO $ hPutStrLn stderr "dungeon: returned to the overworld"
+
+spawnFoe :: EnemyKind -> Int -> V2 Int -> System' ()
+spawnFoe kind hp txy = do
+  e <-
+    newEntity
+      ( Position (tileCenter txy),
+        Health hp hp,
+        FEnemy,
+        Enemy kind 0,
+        Facing (V2 0 (-1))
+      )
+  when (kind == Hexer) $ set e (Mana enemyManaMax enemyManaMax 0)
 
 -- | Once-per-frame UI input: opening, driving, and closing the editor.
 -- Runs off the frame, not the tick — see 'Wyrdshaper.Loop.runLoop'. Needs
@@ -361,8 +546,10 @@ tick g book input = do
     tickCast g
     tickProjectiles g
     tickBurning
+    tickTorches g
     tickRegen
     tickTimers
+    tickLevel g
 
 -- | Movement and cast start. Channeling roots the player: no movement, no
 -- new casts.
@@ -380,6 +567,7 @@ tickInput g book input = do
           speed = case dir of V2 x y | x /= 0 && y /= 0 -> 2; _ -> playerSpeed
       Position p <- get (gamePlayer g)
       Facing f <- get (gamePlayer g)
+      tm <- curMap g
       let delta
             | dir /= V2 0 0 = fmap (* speed) dir
             -- No input: glide onto the grid, clamping the last step so the
@@ -387,7 +575,7 @@ tickInput g book input = do
             | otherwise =
                 fmap (\c -> signum c * min playerSpeed (abs c)) (snapTarget f p - p)
       set (gamePlayer g) $
-        Position (moveAndCollide (gameMap g) bodyHalf p delta)
+        Position (moveAndCollide tm bodyHalf p delta)
       forM_ [dir | dir /= V2 0 0] $ \d ->
         set (gamePlayer g) (Facing d)
       forM_ (quickSlot book input) (startCastAt (gamePlayer g) ticksPerInstr)
@@ -433,11 +621,12 @@ startCastAt e pace s
 tickEnemies :: Game -> System' ()
 tickEnemies g = do
   Position pp <- get (gamePlayer g)
+  tm <- curMap g
   cmapM_ $ \(Enemy kind cd, Position p, e) -> case kind of
     Dummy -> pure ()
     Chaser -> do
       when (quadrance (pp - p) <= chaserAggro * chaserAggro) $
-        set e (Position (moveAndCollide (gameMap g) bodyHalf p (velToward enemySpeed p pp)))
+        set e (Position (moveAndCollide tm bodyHalf p (velToward enemySpeed p pp)))
       Position p' <- get e
       let V2 dx dy = abs <$> (pp - p')
           touching = dx < 24 && dy < 24
@@ -476,12 +665,14 @@ tickCast g = cmapM_ $ \(Casting cs, fac :: Faction, e) ->
           foes <- foeSnapshot fac
           Position pos <- get e
           Facing facing <- get e
+          torches <- unlitTorchTiles
           let wv =
                 WorldView
                   { wvCaster = pos,
                     wvFacing = facing,
                     wvMana = mana - 1,
-                    wvFoes = [(unEntity fe, p) | (fe, p) <- foes]
+                    wvFoes = [(unEntity fe, p) | (fe, p) <- foes],
+                    wvTorches = torches
                   }
           case step wv (castVM cs) of
             Fizzle err -> fizzleCast g e cs (show err)
@@ -510,6 +701,13 @@ fizzleCast g e cs why = do
     "combat: " ++ who ++ " cast fizzled (" ++ why ++ "), backlash " ++ show dmg
   hurt g e dmg backlashFlashTicks
 
+-- | Tile coordinates of every unlit torch: what 'UnlitTorch' can select.
+-- Rebuilt per instruction (like 'foeSnapshot'), which is what lets each
+-- iteration of a kindle loop find the next dark torch.
+unlitTorchTiles :: System' [V2 Int]
+unlitTorchTiles =
+  cfold (\acc (Torch lit, Position p) -> if lit == 0 then tileOf p : acc else acc) []
+
 -- | Live combatants of the other side, with positions: what a caster's
 -- selectors can target and what its bolts can hit.
 foeSnapshot :: Faction -> System' [(Entity, V2 Int)]
@@ -528,22 +726,36 @@ applyEffect g caster fac foes eff = case eff of
     TFoe fid -> forM_ (find ((== fid) . unEntity . fst) foes) $ \(e, _) -> shove e delta
     TTile _ -> pure () -- the ground declines to move
   KindleEff txy -> do
-    burning <- cfold (\acc (Burning t _, e) -> if t == txy then e : acc else acc) []
-    case burning of
-      e : _ -> set e (Burning txy burnTicks) -- refresh, don't stack
-      [] -> newEntity_ (Burning txy burnTicks)
+    -- A torch on the tile catches instead of the ground: torches burn on
+    -- their own clock ('torchLitTicks') and are what the dungeon door
+    -- counts.
+    torches <- cfold (\acc (Torch lit, Position p, e) -> if tileOf p == txy then (e, lit) : acc else acc) []
+    case torches of
+      (e, wasLit) : _ -> do
+        set e (Torch torchLitTicks)
+        when (wasLit == 0) $ do
+          (litN, total) <- cfold (\(l, t) (Torch n) -> (if n > 0 then l + 1 else l, t + 1)) ((0, 0) :: (Int, Int))
+          liftIO . hPutStrLn stderr $
+            "dungeon: torch lit (" ++ show litN ++ "/" ++ show total ++ ")"
+      [] -> do
+        burning <- cfold (\acc (Burning t _, e) -> if t == txy then e : acc else acc) []
+        case burning of
+          e : _ -> set e (Burning txy burnTicks) -- refresh, don't stack
+          [] -> newEntity_ (Burning txy burnTicks)
   where
     shove e delta = do
+      tm <- curMap g
       mp <- get e
       forM_ (mp :: Maybe Position) $ \(Position p) ->
-        set e (Position (moveAndCollide (gameMap g) bodyHalf p delta))
+        set e (Position (moveAndCollide tm bodyHalf p delta))
 
 -- | Fly bolts, expire them on walls and time, land hits on the other side.
 tickProjectiles :: Game -> System' ()
-tickProjectiles g =
+tickProjectiles g = do
+  tm <- curMap g
   cmapM_ $ \(Projectile vel ttl, Position p, fac :: Faction, e) -> do
     let p' = p + vel
-    if ttl <= 0 || boxHitsSolid (gameMap g) boltHalf p'
+    if ttl <= 0 || boxHitsSolid tm boltHalf p'
       then destroyEntity e
       else do
         foes <- foeSnapshot fac
@@ -601,6 +813,41 @@ tickBurning = cmapM_ $ \(Burning txy left, e) ->
     then destroyEntity e
     else set e (Burning txy (left - 1))
 
+-- | Burn down torch flames back to unlit — except once the door is open:
+-- a solved puzzle stays solved, and its torches keep the hall bright.
+tickTorches :: Game -> System' ()
+tickTorches g = do
+  lvl <- liftIO $ readIORef (gameLevel g)
+  unless (lvDoorOpen lvl) $
+    cmapM_ $ \(Torch lit, e) ->
+      when (lit > 0) $ set e (Torch (lit - 1))
+
+-- | The level's own pulse, last in the tick so no other system runs
+-- against a half-swapped world: the torch puzzle unlocks the door, the
+-- shrine notices the player, and stairs under the player's center tile
+-- swap levels.
+tickLevel :: Game -> System' ()
+tickLevel g = do
+  let dg = gameDungeon g
+  lvl <- liftIO $ readIORef (gameLevel g)
+  when (lvPlace lvl == InDungeon && not (lvDoorOpen lvl)) $ do
+    (litN, total) <- cfold (\(l, t) (Torch n) -> (if n > 0 then l + 1 else l, t + 1)) ((0, 0) :: (Int, Int))
+    when (total > 0 && litN == total) $ do
+      liftIO . writeIORef (gameLevel g) $
+        lvl {lvMap = setTile (dgDoor dg) DoorOpen (lvMap lvl), lvDoorOpen = True}
+      liftIO $ hPutStrLn stderr "dungeon: all torches burning - the door grinds open"
+
+  lvl' <- liftIO $ readIORef (gameLevel g)
+  Position pp <- get (gamePlayer g)
+  let ptile = tileOf pp
+  when (lvPlace lvl' == InDungeon && not (lvGoalDone lvl') && ptile == dgGoal dg) $ do
+    liftIO $ writeIORef (gameLevel g) lvl' {lvGoalDone = True}
+    liftIO $ hPutStrLn stderr "dungeon: dungeon complete"
+  case tileAt (lvMap lvl') ptile of
+    Just StairsDown -> enterDungeon g
+    Just StairsUp -> exitDungeon g
+    _ -> pure ()
+
 -- | One mana back every 'manaRegenTicks' ticks, up to each caster's cap.
 tickRegen :: System' ()
 tickRegen = cmap $ \(Mana cur cap clock) ->
@@ -635,14 +882,34 @@ draw :: Gfx -> Game -> System' ()
 draw gfx g = do
   clearFrame gfx (Color 0.03 0.03 0.05 1)
   Position p <- get (gamePlayer g)
-  let cam = clampCamera (gameMap g) p
+  tm <- curMap g
+  let cam = clampCamera tm p
       tileColor t = case t of
         Floor -> Color 0.16 0.22 0.14 1
         Wall -> Color 0.46 0.43 0.38 1
         Water -> Color 0.13 0.25 0.48 1
+        Grass -> Color 0.2 0.32 0.15 1
+        Scrub -> Color 0.32 0.3 0.16 1
+        Swamp -> Color 0.16 0.26 0.24 1
+        Stone -> Color 0.32 0.32 0.34 1
+        Tree -> Color 0.08 0.2 0.1 1
+        Rock -> Color 0.5 0.48 0.5 1
+        DoorLocked -> Color 0.55 0.4 0.15 1
+        DoorOpen -> Color 0.3 0.22 0.1 1
+        StairsDown -> Color 0.35 0.2 0.45 1
+        StairsUp -> Color 0.55 0.4 0.65 1
+        Shrine -> Color 0.8 0.7 0.3 1
       castFrac cs = fromIntegral (castSpent cs) / fromIntegral (max 1 (castSize cs)) :: Float
-  forM_ (tiles (gameMap g)) $ \(txy, t) ->
-    fillWorldRect gfx cam (tileCenter txy) (V2 tileSize tileSize) (tileColor t)
+  -- Only the tiles the camera can see: a generated map is 160x160, and
+  -- repainting all of it every frame would dwarf everything else drawn.
+  let V2 camX camY = cam
+      tx0 = max 0 ((camX - windowW `div` 2) `div` tileSize)
+      tx1 = min (mapWidth tm - 1) ((camX + windowW `div` 2) `div` tileSize)
+      ty0 = max 0 ((camY - windowH `div` 2) `div` tileSize)
+      ty1 = min (mapHeight tm - 1) ((camY + windowH `div` 2) `div` tileSize)
+  forM_ [V2 tx ty | ty <- [ty0 .. ty1], tx <- [tx0 .. tx1]] $ \txy ->
+    forM_ (tileAt tm txy) $ \t ->
+      fillWorldRect gfx cam (tileCenter txy) (V2 tileSize tileSize) (tileColor t)
 
   -- The player: white while hit-flashing, blinking translucent during
   -- i-frames, ember orange otherwise.
@@ -671,6 +938,14 @@ draw gfx g = do
     mc <- get e
     forM_ (mc :: Maybe Casting) $ \(Casting cs) ->
       drawWorldBar gfx cam (ep + V2 0 27) (castFrac cs) (Color 0.95 0.8 0.3 1)
+
+  -- Torches: a dark post when unlit, a bright flame (door-counting state,
+  -- not mere ground fire) when burning.
+  cmapM_ $ \(Torch lit, Position tp) -> do
+    fillWorldRect gfx cam tp (V2 14 18) (Color 0.35 0.22 0.12 1)
+    when (lit > 0) $ do
+      fillWorldRect gfx cam (tp + V2 0 10) (V2 14 12) (Color 0.98 0.72 0.2 1)
+      fillWorldRect gfx cam (tp + V2 0 10) (V2 6 6) (Color 1 0.95 0.6 1)
 
   -- Bolts, colored by whose word they carry.
   cmapM_ $ \(Projectile _ _, Position bp, fac :: Faction) ->

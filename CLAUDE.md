@@ -5,10 +5,12 @@ mechanics, and the milestone build plan live in `CONCEPT.md` — read it before
 starting a milestone. Current status: M0 (skeleton), M1 (tilemap, player
 movement + collision, camera follow), M2 (spell VM, mana, quick slots 1/2/3,
 target dummies, HUD bars), M3 (in-game glyph editor on `E`, spellbook
-save/load to `spellbook.wyrd` in cwd, Willpower budget), and M4 (enemies —
+save/load to `spellbook.wyrd` in cwd, Willpower budget), M4 (enemies —
 chasers and channeling hexers — player health, faction-tagged bolts,
-stagger/fizzle/backlash for every caster, GameOver mode with `R` restart)
-done.
+stagger/fizzle/backlash for every caster, GameOver mode with `R` restart),
+and M5 (seeded procgen: noise-biome overworld with the authored start area
+stamped in, room-graph dungeon behind stairs, torch-puzzle door keyed to a
+loop over the new `UNLIT TORCH` selector, `WYRD_SEED` env var) done.
 
 The game needs the untracked `assets/` directory (gitignored, not
 redistributable — see `CREDITS.md`): `Engine.withEngine` loads the UI fonts
@@ -44,8 +46,27 @@ from `assets/ui_pack/Fonts/` and fails at startup without them.
   beat to stderr (`grep 'combat:'`): player/enemy `cast fizzled (…),
   backlash N`, `player hit`, `enemy slain`, `enemy cast started`,
   `GAME OVER`, `restarted`; runs are frame-for-frame reproducible under
-  Xvfb. Afterwards `spellbook.wyrd` holds the edited slots; delete it to
-  restore defaults.
+  Xvfb. An **M5 procgen pass** follows (~43–95 s): the demo always runs on
+  the fixed `demoSeed` (normal runs take `WYRD_SEED`, else a clock seed —
+  `grep 'worldgen: seed'`); the editor pass writes
+  `REPEAT 4 { KINDLE UNLIT TORCH }` into slot 3 (`grep 'm5 torch spell'`),
+  the player marches out the stamp's south gap and down the carved road
+  onto the entrance stairs, bounces once through both stair transitions,
+  winds the room tree to the antechamber, lights all four torches with the
+  one looped cast, over-loops once to eat the `NoTarget` backlash, and
+  walks through the opened door to the shrine. Assert via
+  `grep 'dungeon:'`: `entered the dungeon`, `returned to the overworld`,
+  `torch lit (1/4)`…`(4/4)`, `all torches burning - the door grinds open`,
+  `dungeon complete`; the over-loop shows up as `combat: player cast
+  fizzled (NoTarget UnlitTorch), backlash 1`, and `demo pos [...]` lines
+  log the tile after each scripted stop. The walk legs come from a BFS
+  over the demoSeed maps compressed into straight runs (mask the stairs
+  tiles first — they're portals); retune them last if any worldgen
+  constant changes. Landing tiles after a stair transition can vary by
+  frame/tick drift, so the script normalizes by walking into a wall
+  before tuning anything from the position. Give headless runs ~115 s
+  before the timeout. Afterwards
+  `spellbook.wyrd` holds the edited slots; delete it to restore defaults.
 
 Toolchain: GHC 9.12.4, cabal 3.16, `GHC2024`, `-Wall` (keep the build
 warning-free).
@@ -69,15 +90,38 @@ warning-free).
   once-per-frame `frame` handler, **never** in `tick`: a frame can run zero
   or two ticks, so per-tick edge handling drops or double-fires taps.
 - `src/Wyrdshaper/Tilemap.hs` — pure tile world: map parsing, solidity, AABB
-  collision (`moveAndCollide`, per-axis pixel sweep). Pure module — test
-  collision changes in `cabal repl lib:wyrdshaper`, no window needed.
+  collision (`moveAndCollide`, per-axis pixel sweep — the *single* solidity
+  path; the M5 door is a `Tile`, not an entity, for exactly this reason).
+  M5 widened `Tile` (biome floors `Grass`/`Scrub`/`Swamp`/`Stone`, solid
+  `Tree`/`Rock`, `DoorLocked`/`DoorOpen`, `StairsDown`/`StairsUp`,
+  `Shrine`) and added `buildTilemap`/`tileAt`/`setTile` for generated and
+  mutable maps. Pure module — test collision changes in
+  `cabal repl lib:wyrdshaper`, no window needed.
+- `src/Wyrdshaper/Worldgen.hs` — pure seeded generation, zero new deps:
+  splitmix64-finalizer coordinate hashing, value-noise fbm biomes, the
+  160x160 overworld (authored map stamped at `owStampOrigin` with a south
+  gap; road to the `StairsDown` clearing carved *always*, so connectivity
+  is by construction; biome enemy scatter excluded 8+ tiles from stamp,
+  road, and clearing — past hexer aggro, which is what keeps the M2–M4
+  demo byte-identical), and the 3x3 room-graph dungeon (randomized-DFS
+  spanning tree, 1-wide corridors; the goal room is the tree-farthest
+  leaf, so its lone corridor is a cut edge — `DoorLocked` sits where it
+  crosses the cell edge, the room before it holds the four torches).
+  Must not import `World` (`World` imports it). Verify with
+  `overworldOK`/`dungeonOK` — compiled, not interpreted: the 200-seed
+  sweep is minutes in ghci, seconds via
+  `cabal exec ghc -- -O1 -isrc <Check>.hs`.
 - `src/Wyrdshaper/Spell.hs` — pure Wyrdtongue core: the spell AST, the
   small-step VM (`step` runs one instruction; the ECS side charges 1 mana
   per call and paces calls every `castPace` ticks — `ticksPerInstr` for the
   player, `enemyTicksPerInstr` for hexers), and the gameplay tunables block
-  (`willpowerMax`, all the M4 combat numbers, and `backlashDamage`: what a
+  (`willpowerMax`, all the M4 combat numbers, `torchLitTicks` — the window
+  that makes the M5 door want a loop — and `backlashDamage`: what a
   collapsing cast costs its caster, scaling with mana committed). Takes a
-  `WorldView` snapshot in, emits `Effect`s out — repl-testable like Tilemap.
+  `WorldView` snapshot in (`wvFoes` plus, since M5, `wvTorches`: the unlit
+  torch tiles the `UnlitTorch` selector picks nearest from — rebuilt per
+  instruction, so each loop iteration re-selects), emits `Effect`s out —
+  repl-testable like Tilemap.
 - `src/Wyrdshaper/Glyph.hs` — pure editor document model: the glyph subset
   (`ENode`; every block node has exactly one child list, so a cursor `Path`
   is `[Int]`), `flatten` to cursor rows, `insertAt`/`deleteAt`/`modifyAt`,
@@ -105,7 +149,19 @@ warning-free).
   player's components are re-`set` on the same entity id so `gamePlayer`
   stays valid), tick systems, `draw`, and the `Shell` (mode + spellbook in
   an `IORef` owned by the loop closures — apecs `Global` stores can't join
-  `AllComponents`, and it's meta-state, not simulation state). Movement is
+  `AllComponents`, and it's meta-state, not simulation state). Since M5
+  the map is level state: `Game` holds the immutable per-run `Overworld`
+  and `Dungeon` plus an `IORef Level` (place, mutable tilemap, puzzle
+  latches); systems read it via `curMap`. `tickLevel` runs *last* in
+  `tick` — the torch-count door unlock (a `setTile` on the level map), the
+  shrine check, and the stair transitions all live there, so no system
+  ever sees a half-swapped level; `enterDungeon`/`exitDungeon` reuse the
+  `restartGame` teardown shape but spare the player entity (HP/mana carry
+  across; re-entry regenerates from the cached gen results, re-locking the
+  door). Torches are `Position`+`Torch` entities; `KindleEff` lights a
+  torch instead of ground fire when one owns the tile, and `tickTorches`
+  stops burning them down once the door is open. `draw` culls tiles to the
+  camera rect (a 160x160 map would otherwise dwarf every other draw). Movement is
   free (3 px/tick) while keys are held; on release `tickInput` glides the
   player to the next tile center along the last motion (`snapTarget` —
   never backwards), so an idle player always sits on the grid and

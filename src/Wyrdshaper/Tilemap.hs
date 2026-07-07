@@ -1,4 +1,4 @@
--- | Hand-authored tile world: the grid, solidity, and AABB collision.
+-- | The tile world: the grid, solidity, and AABB collision.
 --
 -- World coordinates are pixels with the origin at the map's bottom-left and
 -- y increasing upward (matching the renderer's orthographic projection).
@@ -15,6 +15,10 @@ module Wyrdshaper.Tilemap
     tileCenter,
     mapWidth,
     mapHeight,
+    buildTilemap,
+    tileAt,
+    setTile,
+    setTiles,
     boxHitsSolid,
     moveAndCollide,
   )
@@ -24,7 +28,28 @@ import Data.Vector (Vector)
 import qualified Data.Vector as V
 import Linear (V2 (..))
 
-data Tile = Floor | Wall | Water
+data Tile
+  = -- authored / dungeon interior
+    Floor
+  | Wall
+  | Water
+  | -- walkable biome floors
+    Grass
+  | Scrub
+  | Swamp
+  | Stone
+  | -- solid biome features
+    Tree
+  | Rock
+  | -- the dungeon lock: solid until the puzzle opens it
+    DoorLocked
+  | DoorOpen
+  | -- level transitions; walkable, trigger when the player's center tile
+    -- lands on them
+    StairsDown
+  | StairsUp
+  | -- the dungeon goal
+    Shrine
   deriving (Eq, Show)
 
 -- | Rows of tiles, row 0 at the bottom.
@@ -35,9 +60,13 @@ tileSize :: Int
 tileSize = 32
 
 solid :: Tile -> Bool
-solid Floor = False
-solid Wall = True
-solid Water = True
+solid t = case t of
+  Wall -> True
+  Water -> True
+  Tree -> True
+  Rock -> True
+  DoorLocked -> True
+  _ -> False
 
 -- | Parse top-first rows of map text. @#@ wall, @~@ water, @.@ floor,
 -- @\@@ floor and player start. Returns the map and the start position in
@@ -76,6 +105,26 @@ tiles (Tilemap rows) =
 -- | World-pixel center of a tile.
 tileCenter :: V2 Int -> V2 Int
 tileCenter (V2 tx ty) = V2 (tx * tileSize + tileSize `div` 2) (ty * tileSize + tileSize `div` 2)
+
+-- | Synthesize a @w@ x @h@ map from a tile function of grid coordinates.
+buildTilemap :: Int -> Int -> (V2 Int -> Tile) -> Tilemap
+buildTilemap w h f =
+  Tilemap $ V.generate h (\ty -> V.generate w (\tx -> f (V2 tx ty)))
+
+-- | The tile at a grid coordinate, if it is on the map.
+tileAt :: Tilemap -> V2 Int -> Maybe Tile
+tileAt tm@(Tilemap rows) (V2 tx ty)
+  | tx < 0 || ty < 0 || tx >= mapWidth tm || ty >= mapHeight tm = Nothing
+  | otherwise = Just $ rows V.! ty V.! tx
+
+-- | Replace one tile (out-of-bounds coordinates are ignored).
+setTile :: V2 Int -> Tile -> Tilemap -> Tilemap
+setTile (V2 tx ty) t tm@(Tilemap rows)
+  | tx < 0 || ty < 0 || tx >= mapWidth tm || ty >= mapHeight tm = tm
+  | otherwise = Tilemap $ rows V.// [(ty, (rows V.! ty) V.// [(tx, t)])]
+
+setTiles :: [(V2 Int, Tile)] -> Tilemap -> Tilemap
+setTiles ts tm = foldl (\m (xy, t) -> setTile xy t m) tm ts
 
 -- | Out-of-bounds counts as solid.
 solidAtTile :: Tilemap -> Int -> Int -> Bool

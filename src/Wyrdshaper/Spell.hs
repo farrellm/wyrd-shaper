@@ -34,6 +34,7 @@ module Wyrdshaper.Spell
 
     -- * Geometry helpers
     velToward,
+    tileOf,
 
     -- * Tunables
     willpowerMax,
@@ -45,6 +46,7 @@ module Wyrdshaper.Spell
     boltDamage,
     dummyMaxHP,
     burnTicks,
+    torchLitTicks,
     pushStrength,
     playerMaxHP,
     chaserHP,
@@ -96,6 +98,14 @@ dummyMaxHP, burnTicks, pushStrength :: Int
 dummyMaxHP = 3
 burnTicks = 300 -- how long a kindled tile stays alight
 pushStrength = 48 -- px of shove
+
+-- | How long a kindled torch stays lit. The dungeon door wants all four of
+-- its torches burning at once: a @REPEAT 4 { KINDLE UNLIT TORCH }@ lights
+-- them ~'ticksPerInstr' apart (well inside the window), while lighting
+-- them with separate casts means re-pressing the slot three times inside
+-- 0.75 s — the window is what makes the puzzle want a loop.
+torchLitTicks :: Int
+torchLitTicks = 45
 
 playerMaxHP, chaserHP, hexerHP :: Int
 playerMaxHP = 10
@@ -153,7 +163,7 @@ data Value = VNum Int | VDir (V2 Int) | VTarget Target
 data Target = TSelf | TFoe FoeId | TTile (V2 Int)
   deriving (Eq, Show, Read)
 
-data Selector = SelfSel | NearestFoe | TileAhead
+data Selector = SelfSel | NearestFoe | TileAhead | UnlitTorch
   deriving (Eq, Show, Read)
 
 data Op = Add | Sub | Mul | Gt | Lt | Eq
@@ -199,7 +209,11 @@ data WorldView = WorldView
     wvFacing :: V2 Int,
     -- | Caster's mana after paying for the current instruction.
     wvMana :: Int,
-    wvFoes :: [(FoeId, V2 Int)]
+    wvFoes :: [(FoeId, V2 Int)],
+    -- | Tile coordinates of every *unlit* torch. Rebuilt per instruction,
+    -- so each iteration of a loop that kindles 'UnlitTorch' finds the next
+    -- one — that re-selection is the whole torch puzzle.
+    wvTorches :: [V2 Int]
   }
   deriving (Show)
 
@@ -317,8 +331,11 @@ selectTarget wv sel = case sel of
   NearestFoe -> case wvFoes wv of
     [] -> Left (NoTarget sel)
     fs -> Right . TFoe . fst $ minimumBy (comparing (qdTo . snd)) fs
-      where
-        qdTo p = quadrance (p - wvCaster wv)
+  UnlitTorch -> case wvTorches wv of
+    [] -> Left (NoTarget sel)
+    ts -> Right . TTile $ minimumBy (comparing (qdTo . tileCenter)) ts
+  where
+    qdTo p = quadrance (p - wvCaster wv)
 
 applyVerb :: WorldView -> Verb -> [Value] -> Either CastError [Effect]
 applyVerb wv v args = case (v, args) of

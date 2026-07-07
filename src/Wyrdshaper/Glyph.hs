@@ -279,13 +279,13 @@ fieldOptions scope field n = case (n, field) of
   (EInvoke _ a, 0) -> [(verbText v, EInvoke v a) | v <- [Bolt, Push, Kindle]]
   (EInvoke v _, 1) ->
     [ (argText a, EInvoke v a)
-      | a <- map ASel [TileAhead, NearestFoe, SelfSel] ++ map AVar scope
+      | a <- map ASel [TileAhead, NearestFoe, SelfSel, UnlitTorch] ++ map AVar scope
     ]
   (ERepeat _ b, 0) -> [(show k, ERepeat k b) | k <- [1 .. 9]]
   (EIf _ t b, 0) -> [(opText op, EIf op t b) | op <- [Gt, Lt, Eq]]
   (EIf op _ b, 1) -> [(show t, EIf op t b) | t <- [0 .. manaMax]]
   (ELet _ sel b, 0) -> [(map toUpper nm, ELet nm sel b) | nm <- letNames]
-  (ELet nm _ b, 1) -> [(selText s, ELet nm s b) | s <- [NearestFoe, TileAhead, SelfSel]]
+  (ELet nm _ b, 1) -> [(selText s, ELet nm s b) | s <- [NearestFoe, TileAhead, SelfSel, UnlitTorch]]
   _ -> []
 
 -- | Step one field forward (@dir = 1@) or back (@-1@) through its
@@ -389,7 +389,7 @@ verbText :: Verb -> String
 verbText v = case v of Bolt -> "BOLT"; Push -> "PUSH"; Kindle -> "KINDLE"
 
 selText :: Selector -> String
-selText s = case s of TileAhead -> "TILE AHEAD"; NearestFoe -> "NEAREST FOE"; SelfSel -> "SELF"
+selText s = case s of TileAhead -> "TILE AHEAD"; NearestFoe -> "NEAREST FOE"; SelfSel -> "SELF"; UnlitTorch -> "UNLIT TORCH"
 
 argText :: Arg -> String
 argText a = case a of ASel s -> selText s; AVar nm -> map toUpper nm
