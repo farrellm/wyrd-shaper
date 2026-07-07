@@ -13,9 +13,10 @@ world itself.
    power comes from mastering constructs — sequencing, conditionals, loops,
    and eventually recursion and higher-order spells — not from bigger numbers
    on gear.
-2. **Knowledge is power.** Capability is gated by understanding. The Naming
-   system rewards attention and experimentation: the world quietly keeps
-   track of what you have truly engaged with, and pays it back as vocabulary.
+2. **Knowledge is power.** Capability is gated by understanding. New
+   constructs, verbs, and eventually the leap from glyphs to script come
+   from engaging with the language and the world's rules — power grows from
+   what you have learned to express, not from gear.
 3. **The world is legible.** Procedurally generated terrain and dungeons obey
    consistent rules. If fire spreads through dry grass once, it always will —
    the world is a machine the player can learn to program.
@@ -27,18 +28,17 @@ world itself.
 
 ### The Wyrdtongue
 
-Old stories agree on one thing: to know the true name of a thing is to hold
-power over it. The Wyrdtongue is the language those names belong to — the
-language the world was spoken in — and spells are programs written in it.
+The Wyrdtongue is the language the world was spoken in — and spells are
+programs written in it.
 
 Every spell, from the crudest firebolt to the endgame's self-modifying wards,
 is built from one core language:
 
-- **Values** — numbers, directions, durations, and (once learned) true names.
+- **Values** — numbers, directions, durations.
 - **Selectors** — expressions that resolve to targets at runtime: `nearest
   foe`, `self`, `tile ahead`, `everything burning within 5`.
 - **Effect verbs** — the primitive actions: `bolt`, `push`, `shield`,
-  `kindle`, `douse`, `mend`, `bind`, `hush`…
+  `kindle`, `douse`, `mend`, `hush`…
 - **Control** — sequencing, `if`, bounded loops, `let` bindings.
 - **Triggers** — wards that wrap a spell body: *when struck*, *when a foe
   crosses this line*, *when the flame dies*.
@@ -69,8 +69,6 @@ conditionals. Text unlocks what glyphs cannot say:
 - **Recursion** — `chain` can call itself.
 - **Spells as values** — pass a spell to a spell: metamagic, delayed casts,
   wards that install other wards.
-- **Names as values** — true names you have learned become first-class:
-  bind them, pass them, invoke them.
 
 ```
 spell chain n t:
@@ -102,47 +100,6 @@ and the world keeps moving around you.
 Counterplay runs both ways: enemy casters channel under the same rules, and
 interrupting them is a core combat verb.
 
-### Naming
-
-Everything in the world — every substance, creature kind, and phenomenon —
-has a hidden **true name**. You cannot buy them, and no menu lists them.
-You earn them through familiarity.
-
-- The game tracks meaningful interaction: burning things and being burned,
-  standing in storms, listening to wind, working iron, fighting wolves.
-  Each deepens a hidden familiarity score with the thing itself.
-- At thresholds, you get **insight moments** — brief, uncanny flashes where
-  the thing almost makes sense ("for a heartbeat, the fire seems to lean
-  toward you"). These telegraph that a name is close.
-- At the top of the scale, you **learn the name** — and your spell
-  vocabulary permanently grows.
-
-Knowing a name changes what the language can do with its bearer:
-
-- Generic verbs get cheaper and stronger against it (`kindle` on wood is a
-  spark; `kindle` spoken with wood's true name is a bonfire).
-- Name-only verbs unlock: *command*, *quiet*, *unmake* — things you can only
-  do to what you truly know.
-- In script-stage spells, names are values: a spell can take a name as a
-  parameter and work on whatever you know well enough to name.
-
-The dictionary of names you have earned is, effectively, the game's second
-skill tree — and the deep names (iron, lightning, stone, the wind, the true
-name of a dungeon's guardian) are its endgame.
-
-### Bindings
-
-A binding is a spell-forged **link between two things**. Effects applied to
-one flow across the link to the other, at an efficiency set by how *similar*
-the two are — two arrows cut from the same shaft transfer almost perfectly;
-a candle flame and a distant bonfire, poorly and at great cost. Bindings
-drain upkeep mana while they hold.
-
-- **Puzzles**: heat a lever you cannot reach by binding it to a torch in
-  your hand; move a weight by binding it to a rock you can push.
-- **Combat**: bind two enemies and hurt one; bind an enemy's blade to your
-  shield.
-
 ### Inscription
 
 Where channeled spells are speech, inscription is **writing**: freezing a
@@ -163,11 +120,11 @@ of time and let your programs fight for you.
   what you have already written.
 - **Procedural overworld**: noise-based biomes — forest, marsh, scrubland,
   mountains — each biased toward different substances and creatures, so
-  *where you spend time shapes which names you learn*.
+  different regions pose different tactical problems.
 - **Procedural dungeons**: room-graph layouts with lock-and-key structure
   where the keys are language features. A door that needs four torches lit
   within a time window wants a loop; a corridor of pressure plates wants a
-  ward; a sealed vault opens only to a spoken name.
+  ward.
 
 ### Progression at a Glance
 
@@ -179,7 +136,7 @@ of time and let your programs fight for you.
 | 4 | Glyphs | wards/triggers | ~12 glyphs | contingencies: *when struck, push all foes back* |
 | 5 | Script | named spells, parameters | pages, not glyphs | build a personal spellbook of reusable spells |
 | 6 | Script | recursion, spells-as-values | — | chain lightning, metamagic, delayed casts |
-| 7 | Script | names-as-values, inscription | — | command what you truly know; leave your spells behind in the world |
+| 7 | Script | inscription | — | leave your spells behind in the world |
 
 ## Build Plan
 
@@ -229,7 +186,7 @@ Each milestone has a concrete "done when" so progress is checkable.
   editable subset gives every block one child list (`if` is then-only for
   now), so a cursor path is a plain index list; the tier-2+ constructs
   (`if`, loops, `let`) are all present from the start rather than
-  level-gated — gating arrives with M9. The spellbook persists to
+  level-gated — gating arrives with M8. The spellbook persists to
   `spellbook.wyrd` via derived `Show`/`Read`, falling back per slot on bad
   data; Willpower (`willpowerMax`, currently a flat 8) is enforced at
   insert, commit, load, and cast.
@@ -250,26 +207,19 @@ Each milestone has a concrete "done when" so progress is checkable.
   blink, a full-screen red wash sized to the flash, in-world HP pips, and
   a red health bar in HUD slot 2. All numbers live in the Spell.hs
   tunables block.
-- **M5 — Naming.** Familiarity-tracking components, insight events, name
-  unlocks feeding the spell vocabulary (cost/power modifiers, name-gated
-  verbs).
-  *Done when: burning enough things teaches you fire's name, and it changes
-  what your fire spells do.*
-- **M6 — Procgen.** Noise-based overworld chunks with biomes; room-graph
+- **M5 — Procgen.** Noise-based overworld chunks with biomes; room-graph
   dungeons with locks keyed to language features.
   *Done when: a fresh seed produces an explorable overworld and a
   completable dungeon whose puzzle requires a loop or ward.*
-- **M7 — Text language.** Megaparsec parser for the script superset
-  (definitions, parameters, recursion, spells- and names-as-values)
-  targeting the same VM; in-game text editor via `sdl2-ttf`.
+- **M6 — Text language.** Megaparsec parser for the script superset
+  (definitions, parameters, recursion, spells-as-values) targeting the same
+  VM; in-game text editor via `sdl2-ttf`.
   *Done when: the recursive `chain` example above parses, casts, and can be
   round-tripped from an old glyph spell.*
-- **M8 — Bindings & inscription.** The link system with similarity-based
-  efficiency and upkeep; inscribing spells into world objects with triggers.
-  *Done when: one puzzle is solvable only by binding, and an inscribed trap
-  fires with the player standing idle.*
-- **M9 — Progression.** Tier/level progression.
-- **M10 — Polish.** Save/load, audio, balancing instruction costs, real art pass.
+- **M7 — Inscription.** Inscribing spells into world objects with triggers.
+  *Done when: an inscribed trap fires with the player standing idle.*
+- **M8 — Progression.** Tier/level progression.
+- **M9 — Polish.** Save/load, audio, balancing instruction costs, real art pass.
 
 ### Risks
 
@@ -279,7 +229,7 @@ Each milestone has a concrete "done when" so progress is checkable.
 - **In-game editor UX** (both glyph and text) is the biggest unknown. M3
   shipped keyboard-driven rows, then grew Scratch-style mouse drag/snap,
   dropdown field menus, and drag-to-palette deletion on the same document
-  model; expect to keep iterating — wards at tier 4 and the M7 text editor
+  model; expect to keep iterating — wards at tier 4 and the M6 text editor
   are still open questions.
 - **Balance** of per-instruction mana costs, Willpower budgets, and backlash
   scaling will need sustained playtesting; keep the numbers in data, not
