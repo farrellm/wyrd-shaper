@@ -156,7 +156,9 @@ run = withEngine "WyrdShaper" (V2 windowW windowH) $ \gfx -> do
                      in (f + n + 12, acc ++ [(f, walk n ks)])
               openDemoEditor slot editBuf = liftIO $ do
                 sh <- liftIO $ readIORef shellRef
-                let st = openEditor slot (shBook sh)
+                -- The scripted passes aim pixels at the classic row layout;
+                -- forcing the view keeps them byte-identical to pre-block runs.
+                let st = (openEditor slot (shBook sh)) {edView = ViewRows}
                     st' = maybe st (\b -> st {edBuf = b}) (editBuf (edBuf st))
                 writeIORef shellRef sh {shMode = Editing st'}
               commitDemoEdit = do
@@ -352,6 +354,18 @@ run = withEngine "WyrdShaper" (V2 windowW windowH) $ \gfx -> do
                       ([ScancodeW], 2)
                     ]
                   ++ [(5660, logHP "the wyrd is shaped")]
+                  -- block-view pass: the editor opens in the (forced) classic
+                  -- view, the real V key flips it to blocks, and one palette
+                  -- drag runs against the block geometry; Esc cancels, so the
+                  -- spellbook is untouched. Appended after every asserted
+                  -- log line — the pre-block stderr stays a byte-identical
+                  -- prefix.
+                  ++ [ (5700, openDemoEditor 2 (const Nothing)),
+                       (5706, push [demoTapInput [ScancodeV]]),
+                       (5720, dragPaletteRepeat),
+                       (5810, logBuf "block drag"),
+                       (5820, push [demoTapInput [ScancodeEscape]])
+                     ]
           pure $ do
             n <- liftIO $ atomicModifyIORef' frameRef (\n -> (n + 1, n))
             forM_ (find ((== n) . fst) script) snd

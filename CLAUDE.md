@@ -64,7 +64,14 @@ from `assets/ui_pack/Fonts/` and fails at startup without them.
   tiles first — they're portals); retune them last if any worldgen
   constant changes. Landing tiles after a stair transition can vary by
   frame/tick drift, so the script normalizes by walking into a wall
-  before tuning anything from the position. Give headless runs ~115 s
+  before tuning anything from the position. A **block-view pass** closes
+  the script (~95–97 s): the demo's `openDemoEditor` always forces the
+  classic `ViewRows` (that's what keeps every scripted pixel coordinate
+  and the whole earlier stderr byte-identical), so this pass opens slot 3,
+  flips to blocks with a real injected `V` tap, reruns the palette-REPEAT
+  drag against the block geometry (same helpers — they read the live
+  dispatched `Layout`), logs `demo editor [block drag]`, and Esc-cancels
+  so the spellbook is untouched. Give headless runs ~115 s
   before the timeout. Afterwards
   `spellbook.wyrd` holds the edited slots; delete it to restore defaults.
 
@@ -136,15 +143,26 @@ warning-free).
   slot; loading falls back per slot (parse failure or over-Willpower) to
   that slot's default with a stderr warning.
 - `src/Wyrdshaper/Editor.hs` — the in-game glyph editor, keyboard + mouse
-  (Scratch-style drag/snap, dropdown field menus, drag-to-palette delete).
-  All geometry is measured once per frame by `buildLayout` and consumed by
-  *both* `updateEditor` (hit-testing) and `drawEditor` (pixels) — never
-  compute a rect in one and not the other. `updateEditor` is pure given the
-  `Layout` and `Input`; handler precedence is the Esc story: open menu >
-  live drag > keyboard chain (so Esc closes/cancels innermost first). Drag
-  state machine: press → 4 px threshold → drag → drop/cancel; a release
-  lost off-window cancels. Drops resolve via the pure `dropTarget` (nearest
-  gap by y, ties by indent x), shared with the snap-line drawing.
+  (Scratch-style drag/snap, dropdown field menus, drag-to-palette delete),
+  with two presentations of the same buffer: `ViewBlocks` (the default —
+  colored Scratch-like blocks, containers wrapping their inset children in
+  a C-shape) and `ViewRows` (the classic flat indented text rows). `V`
+  toggles views, preserving buffer/cursor/slot. Both views emit the same
+  `Layout`, so `updateEditor` never knows which is showing; only
+  `buildLayout`/`drawEditor` dispatch on `edView`. Block geometry is the
+  pure `blockGeom` (text widths in, boxes out — repl-test with a fake
+  width like `(*8) . length`); its recursion mirrors
+  `flatten`/`insertionPoints` exactly, so flat indices, paths, and snap
+  points mean the same thing in both views. Block shapes are composed
+  `fillUiRect`s — Engine grew no new primitives. All geometry is measured
+  once per frame by `buildLayout` and consumed by *both* `updateEditor`
+  (hit-testing) and `drawEditor` (pixels) — never compute a rect in one
+  and not the other. `updateEditor` is pure given the `Layout` and
+  `Input`; handler precedence is the Esc story: open menu > live drag >
+  keyboard chain (so Esc closes/cancels innermost first). Drag state
+  machine: press → 4 px threshold → drag → drop/cancel; a release lost
+  off-window cancels. Drops resolve via the pure `dropTarget` (nearest gap
+  by y, ties by indent x), shared with the snap-indicator drawing.
 - `src/Wyrdshaper.hs` — game setup (`spawnLevel`, shared with restart: the
   player's components are re-`set` on the same entity id so `gamePlayer`
   stays valid), tick systems, `draw`, and the `Shell` (mode + spellbook in
