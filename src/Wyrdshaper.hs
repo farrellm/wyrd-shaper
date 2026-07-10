@@ -12,7 +12,7 @@ import Apecs
 import Control.Monad (forM_, unless, when)
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (find)
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isJust)
 import Linear (V2 (..), quadrance)
 import System.Environment (lookupEnv)
 import System.IO (hPutStrLn, stderr)
@@ -436,7 +436,8 @@ spawnLevel g = do
       Mana manaMax manaMax 0,
       Facing (V2 0 (-1)),
       Health playerMaxHP playerMaxHP,
-      FPlayer
+      FPlayer,
+      Anim (owStart ow) 0 False
     )
   spawnOverworldFoes g
 
@@ -570,6 +571,7 @@ tick g book input = do
     tickTorches g
     tickRegen
     tickTimers
+    tickAnim
     tickLevel g
 
 -- | Movement and cast start. Channeling roots the player: no movement, no
@@ -884,6 +886,13 @@ tickTimers = do
   cmapM_ $ \(Invuln n, e) ->
     if n <= 1 then destroy e (Proxy @Invuln) else set e (Invuln (n - 1))
 
+-- | Advance every animation clock and note whether its owner moved this
+-- tick. Runs after all movement, and moved-ness comes from comparing
+-- positions, so keys, the snap glide, and shoves all count the same.
+tickAnim :: System' ()
+tickAnim = cmap $ \(Anim prev clock _, Position p) ->
+  Anim p (clock + 1) (p /= prev)
+
 -- | Death is not the end: clear the board and speak the level anew. The
 -- player keeps their entity id (and spellbook); everything else respawns.
 restartGame :: Game -> System' ()
@@ -927,15 +936,28 @@ draw gfx terrain g = do
       forM_ (tileDecor terrain inDungeon txy t) $ \(sd, size, off) ->
         sprite txy size off sd
 
-  -- The player: white while hit-flashing, blinking translucent during
-  -- i-frames, ember orange otherwise.
+  -- The player: the heroes pack Sorcerer over a drop shadow — walk cycle,
+  -- idle bob, the cast pose while channeling, the death sprawl under the
+  -- game-over veil. Texture color-mod only darkens, so the hurt flash is a
+  -- red tint (not the rects' white); i-frames blink translucent. The
+  -- sprite's 96x96 cell is mostly margin: the +4 anchor puts the art's
+  -- feet on the bottom of the 24x24 collision body.
   mFlash <- get (gamePlayer g)
   mInv <- get (gamePlayer g)
-  let playerColor
-        | Just (HitFlash _) <- mFlash :: Maybe HitFlash = Color 1 1 1 1
-        | Just (Invuln n) <- mInv :: Maybe Invuln, odd (n `div` 4) = Color 0.9 0.4 0.1 0.5
-        | otherwise = Color 0.9 0.4 0.1 1
-  fillWorldRect gfx cam p (V2 24 24) playerColor
+  mChant <- get (gamePlayer g)
+  Facing pface <- get (gamePlayer g)
+  Health php _ <- get (gamePlayer g)
+  Anim _ pclock pmoving <- get (gamePlayer g)
+  let playerTint
+        | Just (HitFlash _) <- mFlash :: Maybe HitFlash = Just (Color 1 0.35 0.35 1)
+        | Just (Invuln n) <- mInv :: Maybe Invuln, odd (n `div` 4) = Just (Color 1 1 1 0.5)
+        | otherwise = Nothing
+      chanting = isJust (mChant :: Maybe Casting)
+      SpriteDraw shTex shSrc shSize shTint = sorcererShadow terrain
+      SpriteDraw pTex pSrc pSize pTint =
+        sorcererSprite terrain pface (php <= 0) chanting pmoving pclock playerTint
+  drawWorldSprite gfx cam (p + V2 0 (-12)) shSize shTex shSrc shSize shTint
+  drawWorldSprite gfx cam (p + V2 0 4) pSize pTex pSrc pSize pTint
 
   -- Enemies (dummies included), with hurt-only HP bars and, while one is
   -- channeling, the gold cast bar that telegraphs the interrupt window.

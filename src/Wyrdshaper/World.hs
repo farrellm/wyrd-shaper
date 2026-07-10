@@ -18,6 +18,7 @@ module Wyrdshaper.World
     HitFlash (..),
     Invuln (..),
     Torch (..),
+    Anim (..),
 
     -- * World
     World,
@@ -129,6 +130,14 @@ newtype Torch = Torch Int
 
 instance Component Torch where type Storage Torch = Map Torch
 
+-- | Sprite-animation state: the owner's position last tick, a free-running
+-- tick clock (frame phase), and whether the owner moved this tick — set by
+-- comparing positions, so every movement source (keys, snap glide, shoves)
+-- counts.
+data Anim = Anim !(V2 Int) !Int !Bool
+
+instance Component Anim where type Storage Anim = Map Anim
+
 makeWorld
   "World"
   [ ''Position,
@@ -142,7 +151,8 @@ makeWorld
     ''Enemy,
     ''HitFlash,
     ''Invuln,
-    ''Torch
+    ''Torch,
+    ''Anim
   ]
 
 type System' a = SystemT World IO a
@@ -158,7 +168,7 @@ type AllComponents =
     Casting,
     Projectile,
     Health,
-    (Burning, Faction, Enemy, HitFlash, Invuln, Torch)
+    (Burning, Faction, Enemy, HitFlash, Invuln, Torch, Anim)
   )
 
 -- | Fully delete an entity. The only way game code should despawn anything.

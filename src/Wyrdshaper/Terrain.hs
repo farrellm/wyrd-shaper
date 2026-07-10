@@ -9,6 +9,10 @@
 -- randomness. Oversized 2x2-art decorations (the dungeon door and the
 -- shrine circle) are a separate pass ('tileDecor') so they can overlap
 -- neighboring tiles *after* those tiles' bases have painted.
+--
+-- The heroes pack lives here too: 'sorcererSprite' picks the player's
+-- frame from the Sorcerer sheets (96x96 cells at 2x — the body art inside
+-- is about a tile, the rest is margin).
 module Wyrdshaper.Terrain
   ( Terrain,
     loadTerrain,
@@ -16,6 +20,8 @@ module Wyrdshaper.Terrain
     tileSprites,
     tileDecor,
     torchSprite,
+    sorcererSprite,
+    sorcererShadow,
   )
 where
 
@@ -53,7 +59,13 @@ data Terrain = Terrain
     txDoorOpen :: Texture,
     txCircle :: Texture,
     txTorchOff :: Texture,
-    txTorchOn :: Texture
+    txTorchOn :: Texture,
+    -- heroes_pack (the player)
+    txSorcIdle :: Texture,
+    txSorcWalk :: Texture,
+    txSorcCast :: Texture,
+    txSorcDeath :: Texture,
+    txSorcShadow :: Texture
   }
 
 -- | Load every sheet. Fails fast with a pointer at the gitignored
@@ -64,6 +76,7 @@ loadTerrain gfx = do
       dp p = "assets/desert_pack/2x (32x32)/Tileset/" ++ p
       cp p = "assets/castles_pack/2x (32x32)/Tiles/" ++ p
       fp p = "assets/dungeons_fire_pack/2x (32x32)/" ++ p
+      hp p = "assets/heroes_pack/2x/Character sprites/Sorcerer/" ++ p
       load = loadTexture gfx
   txGrass' <- load (ap "Grass.png")
   txCoast' <- load (ap "Coastlines.png")
@@ -87,6 +100,11 @@ loadTerrain gfx = do
   txCircle' <- load (fp "Objects & Decoration/SummoningCircle_Off.png")
   txTorchOff' <- load (fp "Objects & Decoration/Torch_Floor_Off.png")
   txTorchOn' <- load (fp "Objects & Decoration/Torch_Floor_On.png")
+  txSorcIdle' <- load (hp "Sorcerer_idle.png")
+  txSorcWalk' <- load (hp "Sorcerer_walk.png")
+  txSorcCast' <- load (hp "Sorcerer_cast.png")
+  txSorcDeath' <- load (hp "Sorcerer_death.png")
+  txSorcShadow' <- load (hp "Shadow.png")
   pure
     Terrain
       { txGrass = txGrass',
@@ -107,7 +125,12 @@ loadTerrain gfx = do
         txDoorOpen = txDoorOpen',
         txCircle = txCircle',
         txTorchOff = txTorchOff',
-        txTorchOn = txTorchOn'
+        txTorchOn = txTorchOn',
+        txSorcIdle = txSorcIdle',
+        txSorcWalk = txSorcWalk',
+        txSorcCast = txSorcCast',
+        txSorcDeath = txSorcDeath',
+        txSorcShadow = txSorcShadow'
       }
 
 -- | A whole single-texture sprite (the one-tile PNGs).
@@ -235,3 +258,31 @@ torchSprite :: Terrain -> Int -> SpriteDraw
 torchSprite tr lit
   | lit <= 0 = whole (txTorchOff tr) Nothing
   | otherwise = cell (txTorchOn tr) (V2 ((lit `div` 8) `mod` 4) 0) Nothing
+
+-- | The heroes pack's sheet cell: 96x96 at 2x. Rows are facings, top to
+-- bottom down\/left\/right\/up; columns are the animation frames.
+heroCell :: Int
+heroCell = 96
+
+-- | The player's Sorcerer frame: the death sprawl beats the cast pose
+-- beats the walk cycle beats the idle bob; @clock@ (a free-running tick
+-- counter) phases the cycling sheets. Diagonal facings show the side view.
+sorcererSprite :: Terrain -> V2 Int -> Bool -> Bool -> Bool -> Int -> Maybe Color -> SpriteDraw
+sorcererSprite tr (V2 fx fy) dead casting moving clock =
+  SpriteDraw sheet ((* heroCell) <$> V2 col row) (V2 heroCell heroCell)
+  where
+    (sheet, col)
+      | dead = (txSorcDeath tr, 7)
+      | casting = (txSorcCast tr, 0)
+      | moving = (txSorcWalk tr, (clock `div` 8) `mod` 4)
+      | otherwise = (txSorcIdle tr, (clock `div` 20) `mod` 4)
+    row
+      | fx < 0 = 1
+      | fx > 0 = 2
+      | fy > 0 = 3
+      | otherwise = 0
+
+-- | The drop-shadow blob under the Sorcerer (blit 1:1 — its source size is
+-- the world size).
+sorcererShadow :: Terrain -> SpriteDraw
+sorcererShadow tr = SpriteDraw (txSorcShadow tr) (V2 0 0) (V2 20 6) Nothing
