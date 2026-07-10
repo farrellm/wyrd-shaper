@@ -36,6 +36,11 @@ module Wyrdshaper.Engine
     fillUiRect,
     presentFrame,
 
+    -- * Textures
+    Texture,
+    loadTexture,
+    drawWorldSprite,
+
     -- * Text
     FontKind (..),
     drawText,
@@ -51,11 +56,13 @@ import Control.Monad.IO.Class (MonadIO)
 import qualified Data.Set as Set
 import qualified Data.Text as T
 import Data.Word (Word8)
-import Linear (V2 (..), V4 (..))
+import Data.Maybe (fromMaybe)
+import Linear (V2 (..), V3 (..), V4 (..))
 import Linear.Affine (Point (P))
 import SDL (($=))
 import qualified SDL
 import qualified SDL.Font as Font
+import qualified SDL.Image as Image
 import SDL.Input.Keyboard.Codes
 
 -- | The window and renderer handles, the (fixed) window size in pixels, and
@@ -111,6 +118,9 @@ withEngine title size act =
             SDL.destroyRenderer
             $ \r -> do
               SDL.rendererDrawBlendMode r $= SDL.BlendAlphaBlend
+              -- Pixel art: scale by nearest neighbor, whatever the user's
+              -- environment hints say.
+              SDL.HintRenderScaleQuality $= SDL.ScaleNearest
               bracket (loadUiFont uiTextFontPath uiTextFontSize) Font.free $ \textFont ->
                 bracket (loadUiFont uiTitleFontPath uiTitleFontSize) Font.free $ \titleFont ->
                   act (Gfx r win size textFont titleFont)
@@ -237,12 +247,62 @@ clearFrame gfx c = do
 -- world point at the window center, @center@ is the rect's AABB center, and
 -- @size@ its full extents.
 fillWorldRect :: (MonadIO m) => Gfx -> V2 Int -> V2 Int -> V2 Int -> Color -> m ()
-fillWorldRect gfx (V2 camX camY) (V2 cx cy) (V2 w h) c =
-  fillUiRect gfx (V2 sx sy) (V2 w h) c
+fillWorldRect gfx cam center size c =
+  fillUiRect gfx (worldToScreen gfx cam center size) size c
+
+-- | The one world→screen flip: the screen position of the top-left corner
+-- of a world-space AABB given by center and full extents.
+worldToScreen :: Gfx -> V2 Int -> V2 Int -> V2 Int -> V2 Int
+worldToScreen gfx (V2 camX camY) (V2 cx cy) (V2 w h) = V2 sx sy
   where
     V2 winW winH = gfxWinSize gfx
     sx = cx - w `div` 2 - camX + winW `div` 2
     sy = camY + winH `div` 2 - (cy + h `div` 2) -- the y-flip
+
+-- | A loaded image the renderer can copy from. Opaque outside Engine.
+newtype Texture = Texture SDL.Texture
+
+-- | Load an image file (PNG) into a renderer texture. Like the UI fonts,
+-- terrain art lives in the gitignored @assets/@, so fail with a pointer to
+-- that when the file is missing.
+loadTexture :: Gfx -> FilePath -> IO Texture
+loadTexture gfx path =
+  Texture <$> Image.loadTexture (gfxRenderer gfx) path
+    `catch` \(e :: SomeException) ->
+      ioError . userError $
+        "cannot load texture "
+          ++ show path
+          ++ " (assets/ is gitignored and must be supplied separately): "
+          ++ show e
+
+-- | Copy a rect of a texture onto a world-space AABB (center + full
+-- extents, same convention as 'fillWorldRect'). @srcPos@\/@srcSize@ are in
+-- texture pixels. An optional tint multiplies the texture's color.
+drawWorldSprite ::
+  (MonadIO m) =>
+  Gfx ->
+  -- | camera
+  V2 Int ->
+  -- | world AABB center
+  V2 Int ->
+  -- | world AABB full extents
+  V2 Int ->
+  Texture ->
+  -- | source rect position (texture pixels)
+  V2 Int ->
+  -- | source rect size (texture pixels)
+  V2 Int ->
+  Maybe Color ->
+  m ()
+drawWorldSprite gfx cam center size (Texture tex) srcPos srcSize tint = do
+  let scr = worldToScreen gfx cam center size
+      rect p s = SDL.Rectangle (P (fromIntegral <$> p)) (fromIntegral <$> s)
+      V4 mr mg mb ma = toV4 (fromMaybe (Color 1 1 1 1) tint)
+  SDL.textureColorMod tex $= V3 mr mg mb
+  SDL.textureAlphaMod tex $= ma
+  SDL.copy (gfxRenderer gfx) tex (Just (rect srcPos srcSize)) (Just (rect scr size))
+  SDL.textureColorMod tex $= V3 255 255 255
+  SDL.textureAlphaMod tex $= 255
 
 -- | One filled fraction-bar (dark backing, colored fill), @slot@ bars up
 -- from the bottom-left corner of the screen.

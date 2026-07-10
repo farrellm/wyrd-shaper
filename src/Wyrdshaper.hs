@@ -23,6 +23,7 @@ import Wyrdshaper.Glyph (Arg (..), ENode (..), compile, cycleField, ipPath, modi
 import Wyrdshaper.Loop
 import Wyrdshaper.Spell
 import Wyrdshaper.Spellbook
+import Wyrdshaper.Terrain
 import Wyrdshaper.Tilemap
 import Wyrdshaper.World
 import Wyrdshaper.Worldgen
@@ -90,6 +91,7 @@ resolveSeed = do
 run :: IO ()
 run = withEngine "WyrdShaper" (V2 windowW windowH) $ \gfx -> do
   w <- initWorld
+  terrain <- loadTerrain gfx
   book <- loadSpellbook spellbookPath
   seed <- resolveSeed
   let overworld = generateOverworld (mix64 (seed + 1))
@@ -393,7 +395,7 @@ run = withEngine "WyrdShaper" (V2 windowW windowH) $ \gfx -> do
             Playing -> tick game (shBook sh) (fromMaybe input inj)
       )
       ( do
-          draw gfx game
+          draw gfx terrain game
           sh <- liftIO $ readIORef shellRef
           forM_ [st | Editing st <- [shMode sh]] $ \st -> do
             lay <- buildLayout gfx st
@@ -889,30 +891,19 @@ restartGame g = do
 
 -- | Render with the camera on the player, clamped to the map edges; HUD
 -- bars for mana, cast progress (while channeling), and health. Draw order
--- is explicit back-to-front: tiles, player, enemies, bolts, fire, HUD,
--- damage wash. The caller presents the frame (the editor panel and the
--- game-over veil, when applicable, draw on top).
-draw :: Gfx -> Game -> System' ()
-draw gfx g = do
+-- is explicit back-to-front: tiles (bases, then oversized decor), player,
+-- enemies, bolts, fire, HUD, damage wash. The caller presents the frame
+-- (the editor panel and the game-over veil, when applicable, draw on top).
+draw :: Gfx -> Terrain -> Game -> System' ()
+draw gfx terrain g = do
   clearFrame gfx (Color 0.03 0.03 0.05 1)
   Position p <- get (gamePlayer g)
-  tm <- curMap g
-  let cam = clampCamera tm p
-      tileColor t = case t of
-        Floor -> Color 0.16 0.22 0.14 1
-        Wall -> Color 0.46 0.43 0.38 1
-        Water -> Color 0.13 0.25 0.48 1
-        Grass -> Color 0.2 0.32 0.15 1
-        Scrub -> Color 0.32 0.3 0.16 1
-        Swamp -> Color 0.16 0.26 0.24 1
-        Stone -> Color 0.32 0.32 0.34 1
-        Tree -> Color 0.08 0.2 0.1 1
-        Rock -> Color 0.5 0.48 0.5 1
-        DoorLocked -> Color 0.55 0.4 0.15 1
-        DoorOpen -> Color 0.3 0.22 0.1 1
-        StairsDown -> Color 0.35 0.2 0.45 1
-        StairsUp -> Color 0.55 0.4 0.65 1
-        Shrine -> Color 0.8 0.7 0.3 1
+  lvl <- liftIO $ readIORef (gameLevel g)
+  let tm = lvMap lvl
+      inDungeon = lvPlace lvl == InDungeon
+      cam = clampCamera tm p
+      sprite txy size off (SpriteDraw tex srcPos srcSize tint) =
+        drawWorldSprite gfx cam (tileCenter txy + off) size tex srcPos srcSize tint
       castFrac cs = fromIntegral (castSpent cs) / fromIntegral (max 1 (castSize cs)) :: Float
   -- Only the tiles the camera can see: a generated map is 160x160, and
   -- repainting all of it every frame would dwarf everything else drawn.
@@ -923,7 +914,13 @@ draw gfx g = do
       ty1 = min (mapHeight tm - 1) ((camY + windowH `div` 2) `div` tileSize)
   forM_ [V2 tx ty | ty <- [ty0 .. ty1], tx <- [tx0 .. tx1]] $ \txy ->
     forM_ (tileAt tm txy) $ \t ->
-      fillWorldRect gfx cam (tileCenter txy) (V2 tileSize tileSize) (tileColor t)
+      mapM_ (sprite txy (V2 tileSize tileSize) (V2 0 0)) (tileSprites terrain inDungeon tm txy t)
+  -- Oversized decor (the dungeon door arch, the shrine circle) goes over
+  -- the painted bases, far rows first, cull widened a tile for overhang.
+  forM_ [V2 tx ty | ty <- reverse [max 0 (ty0 - 1) .. min (mapHeight tm - 1) (ty1 + 1)], tx <- [max 0 (tx0 - 1) .. min (mapWidth tm - 1) (tx1 + 1)]] $ \txy ->
+    forM_ (tileAt tm txy) $ \t ->
+      forM_ (tileDecor terrain inDungeon txy t) $ \(sd, size, off) ->
+        sprite txy size off sd
 
   -- The player: white while hit-flashing, blinking translucent during
   -- i-frames, ember orange otherwise.
@@ -953,13 +950,11 @@ draw gfx g = do
     forM_ (mc :: Maybe Casting) $ \(Casting cs) ->
       drawWorldBar gfx cam (ep + V2 0 27) (castFrac cs) (Color 0.95 0.8 0.3 1)
 
-  -- Torches: a dark post when unlit, a bright flame (door-counting state,
-  -- not mere ground fire) when burning.
+  -- Torches: cold floor torch when unlit, the burning frames (door-counting
+  -- state, not mere ground fire) once kindled.
   cmapM_ $ \(Torch lit, Position tp) -> do
-    fillWorldRect gfx cam tp (V2 14 18) (Color 0.35 0.22 0.12 1)
-    when (lit > 0) $ do
-      fillWorldRect gfx cam (tp + V2 0 10) (V2 14 12) (Color 0.98 0.72 0.2 1)
-      fillWorldRect gfx cam (tp + V2 0 10) (V2 6 6) (Color 1 0.95 0.6 1)
+    let SpriteDraw tex srcPos srcSize tint = torchSprite terrain lit
+    drawWorldSprite gfx cam tp (V2 tileSize tileSize) tex srcPos srcSize tint
 
   -- Bolts, colored by whose word they carry.
   cmapM_ $ \(Projectile _ _, Position bp, fac :: Faction) ->
