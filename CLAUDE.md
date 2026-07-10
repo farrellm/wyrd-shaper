@@ -14,7 +14,12 @@ loop over the new `UNLIT TORCH` selector, `WYRD_SEED` env var) done.
 
 The game needs the untracked `assets/` directory (gitignored, not
 redistributable — see `CREDITS.md`): `Engine.withEngine` loads the UI fonts
-from `assets/ui_pack/Fonts/` and fails at startup without them.
+from `assets/ui_pack/Fonts/`, and `Terrain.loadTerrain` loads the terrain
+sheets from the Franuka packs' **2x (32x32)** variants (`asset_pack/2x/`,
+`desert_pack/2x (32x32)/`, `castles_pack/2x (32x32)/`,
+`dungeons_fire_pack/2x (32x32)/` — the 2x directory naming varies per
+pack); startup fails without any of them. 2x art is 1:1 with the 32px tile
+grid — nothing on the tile layer is scaled.
 
 ## Commands
 
@@ -81,13 +86,15 @@ warning-free).
 ## Architecture
 
 - `src/Wyrdshaper/Engine.hs` — the *only* module that imports SDL (sdl2-ttf's
-  `SDL.Font` included): window and renderer lifecycle, UI font loading, the
-  per-frame `Input` snapshot, immediate-mode rect drawing (`fillWorldRect`,
-  `drawHudBar`, `fillUiRect`), and text (`drawText`, `measureText` — textures
-  are created and destroyed per string per frame; cache here if a live HUD
-  ever needs lots of text). Rendering is stateless — `draw` repaints
-  everything from game state each frame; visuals have no entity lifecycle to
-  manage.
+  `SDL.Font` and sdl2-image's `SDL.Image` included): window and renderer
+  lifecycle, UI font loading, the per-frame `Input` snapshot, immediate-mode
+  rect drawing (`fillWorldRect`, `drawHudBar`, `fillUiRect`), sprite blits
+  (opaque `Texture`, `loadTexture`, `drawWorldSprite` — source rect in
+  texture pixels, dest in world space, optional color-mod tint), and text
+  (`drawText`, `measureText` — textures are created and destroyed per string
+  per frame; cache here if a live HUD ever needs lots of text). Rendering is
+  stateless — `draw` repaints everything from game state each frame; visuals
+  have no entity lifecycle to manage.
 - `src/Wyrdshaper/World.hs` — the apecs world: component types and stores,
   the `makeWorld` splice, and `destroyEntity`.
 - `src/Wyrdshaper/Loop.hs` — fixed-timestep loop (60 ticks/s). All gameplay
@@ -129,6 +136,21 @@ warning-free).
   torch tiles the `UnlitTorch` selector picks nearest from — rebuilt per
   instruction, so each loop iteration re-selects), emits `Effect`s out —
   repl-testable like Tilemap.
+- `src/Wyrdshaper/Terrain.hs` — terrain art: loads the 2x pack sheets once
+  (`loadTerrain`) and maps every `Tile` to its draw list (`tileSprites`:
+  floor base first, then a transparent feature sprite over it). Variant
+  picks are `mix64` on the tile coordinate — stateless, stable across
+  frames. Two-case wall autotile (face cell when the tile below is
+  walkable, top/fill cell otherwise) for both the castle stamp walls and
+  the dungeon. Tree tiles index a 3x3 repeat block of the forest sheet by
+  `(1 + x mod 3, 1 + y mod 3)`, so adjacent trees merge into seamless
+  canopy. Oversized 2x2-art decor (door arch, shrine circle) is a separate
+  `tileDecor` pass so it can overlap neighbors after their bases painted;
+  `torchSprite` maps a torch's burn-down counter to the off sprite or one
+  of four burning frames (the counter doubles as the animation clock).
+  Beware Franuka sheet cells that look like ground but are transparent
+  decals (e.g. `Stone tile.png`, `Sand_variations.png` rows 0-1 cols 2-3):
+  check cell alpha before using one as a base.
 - `src/Wyrdshaper/Glyph.hs` — pure editor document model: the glyph subset
   (`ENode`; every block node has exactly one child list, so a cursor `Path`
   is `[Int]`), `flatten` to cursor rows, `insertAt`/`deleteAt`/`modifyAt`,
@@ -208,11 +230,14 @@ warning-free).
   take screen-space positions directly.
 - Entity positions are AABB centers (`Position`); collision boxes span the
   half-open interval [center − half, center + half).
-- Draw order is explicit and back-to-front in `Wyrdshaper.draw`: tiles,
-  player, enemies (with in-world HP/cast bars), bolts, fire, HUD, damage
-  wash; the editor panel or game-over veil (when applicable) draws on top
-  of it all, and `presentFrame` is called by the loop's draw closure, not
-  by `draw`.
+- Draw order is explicit and back-to-front in `Wyrdshaper.draw`: tile bases
+  (`tileSprites`), oversized tile decor (`tileDecor`, cull widened a tile
+  for overhang, far rows first), player, enemies (with in-world HP/cast
+  bars), torch sprites, bolts, fire, HUD, damage wash; the editor panel or
+  game-over veil (when applicable) draws on top of it all, and
+  `presentFrame` is called by the loop's draw closure, not by `draw`. The
+  player and monsters are still flat rects — terrain only has textures so
+  far.
 
 ## apecs / sdl2 notes (apecs 0.10, sdl2 2.5.6)
 
