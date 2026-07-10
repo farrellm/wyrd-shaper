@@ -105,7 +105,11 @@ warning-free).
   or two ticks, so per-tick edge handling drops or double-fires taps.
 - `src/Wyrdshaper/Tilemap.hs` — pure tile world: map parsing, solidity, AABB
   collision (`moveAndCollide`, per-axis pixel sweep — the *single* solidity
-  path; the M5 door is a `Tile`, not an entity, for exactly this reason).
+  path; the M5 door is a `Tile`, not an entity, for exactly this reason;
+  `moveAndCollideCentered` is the same sweep plus a per-step refusal that
+  stops the center on the last open tile's center before a solid tile —
+  the player's variant, so walking into a wall parks on the grid instead
+  of flush).
   M5 widened `Tile` (biome floors `Grass`/`Scrub`/`Swamp`/`Stone`, solid
   `Tree`/`Rock`, `DoorLocked`/`DoorOpen`, `StairsDown`/`StairsUp`,
   `Shrine`) and added `buildTilemap`/`tileAt`/`setTile` for generated and
@@ -202,10 +206,13 @@ warning-free).
   torch instead of ground fire when one owns the tile, and `tickTorches`
   stops burning them down once the door is open. `draw` culls tiles to the
   camera rect (a 160x160 map would otherwise dwarf every other draw). Movement is
-  free (3 px/tick) while keys are held; on release `tickInput` glides the
-  player to the next tile center along the last motion (`snapTarget` —
-  never backwards), so an idle player always sits on the grid and
-  `TileAhead` spells read predictably. Combat: one
+  free (3 px/tick) while keys are held, except that the player never moves
+  past the middle of the last open tile before a wall
+  (`moveAndCollideCentered` — enemies and shoves keep flush
+  `moveAndCollide`); on release `tickInput` glides the player to the next
+  tile center along the last motion (`snapTarget` — never backwards), so an
+  idle player always sits on the grid — walked into a wall too, with no
+  snap-back — and `TileAhead` spells read predictably. Combat: one
   `tickCast` `cmapM_` advances every caster (player and hexers) under the
   same rules; every cast collapse — stagger, `NoTarget`, `OutOfMana`, … —
   routes through `fizzleCast`, which destroys `Casting` *first* (no
