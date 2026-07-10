@@ -21,6 +21,7 @@ module Wyrdshaper.Tilemap
     setTiles,
     boxHitsSolid,
     moveAndCollide,
+    moveAndCollideCentered,
   )
 where
 
@@ -145,18 +146,44 @@ boxHitsSolid tm (V2 hx hy) (V2 cx cy) =
 -- | Move an AABB by a delta, sliding along solid tiles: the x axis is swept
 -- first, then y, one pixel at a time (deltas are a few pixels per tick).
 moveAndCollide :: Tilemap -> V2 Int -> V2 Int -> V2 Int -> V2 Int
-moveAndCollide tm he p (V2 dx dy) =
-  let px = sweep (\n (V2 x y) -> V2 (x + n) y) dx p
-   in sweep (\n (V2 x y) -> V2 x (y + n)) dy px
+moveAndCollide tm he = sweepAABB (\q' _ -> boxHitsSolid tm he q')
+
+-- | 'moveAndCollide', but an axis also refuses to carry the center past
+-- the center of its containing tile while the next tile along the motion
+-- is solid anywhere across the box's span — so walking into a wall stops
+-- on the tile center instead of flush against the wall. The span matches
+-- 'boxHitsSolid', so the clamp fires exactly where the flush sweep would
+-- eventually stop; away from walls the two functions move identically.
+moveAndCollideCentered :: Tilemap -> V2 Int -> V2 Int -> V2 Int -> V2 Int
+moveAndCollideCentered tm he@(V2 hx hy) = sweepAABB refuse
   where
-    sweep move d q0
+    refuse q' step = boxHitsSolid tm he q' || pastCenterIntoWall q' step
+    pastCenterIntoWall (V2 cx cy) (V2 sx sy)
+      | sx /= 0 = pastInto cx sx (\tx -> any (solidAtTile tm tx) (tileSpan cy hy))
+      | sy /= 0 = pastInto cy sy (\ty -> any (\tx -> solidAtTile tm tx ty) (tileSpan cx hx))
+      | otherwise = False
+    pastInto c s wallAt =
+      let t = c `div` tileSize
+       in s * (c - (t * tileSize + tileSize `div` 2)) > 0 && wallAt (t + s)
+    tileSpan c h = [(c - h) `div` tileSize .. (c + h - 1) `div` tileSize]
+
+-- | The shared per-axis pixel sweep: x then y, refusing any single-pixel
+-- step the predicate rejects. The predicate sees the candidate center and
+-- the unit step that produced it.
+sweepAABB :: (V2 Int -> V2 Int -> Bool) -> V2 Int -> V2 Int -> V2 Int
+sweepAABB refuse p (V2 dx dy) =
+  let px = sweep (\n (V2 x y) -> V2 (x + n) y) (V2 1 0) dx p
+   in sweep (\n (V2 x y) -> V2 x (y + n)) (V2 0 1) dy px
+  where
+    sweep move axis d q0
       | d == 0 = q0
       | otherwise = go (abs d) q0
       where
+        step = fmap (* signum d) axis
         go 0 q = q
         go n q =
           let q' = move (signum d) q
-           in if boxHitsSolid tm he q' then q else go (n - 1) q'
+           in if refuse q' step then q else go (n - 1) q'
 
 -- | The hand-authored M1 map (48x37 tiles).
 worldMap :: (Tilemap, V2 Int)

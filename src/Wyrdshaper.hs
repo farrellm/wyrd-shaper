@@ -319,8 +319,13 @@ run = withEngine "WyrdShaper" (V2 windowW windowH) $ \gfx -> do
                        -- out to the overworld beside the entrance, and the
                        -- westward glide carries us right back down — both
                        -- transitions exercised, and enterDungeon's exact
-                       -- placement re-centers us on the entry tile.
-                       (3945, walk 45 [ScancodeA]),
+                       -- placement re-centers us on the entry tile. 42 is
+                       -- the middle of the [40,44] window where the held
+                       -- frames end between the exit placement and the
+                       -- stairs, leaving the crossing to the glide (shorter
+                       -- never leaves the placement center, longer bounces
+                       -- a second time on held frames alone).
+                       (3945, walk 42 [ScancodeA]),
                        (4010, logPos "after stair bounce")
                      ]
                   -- entry room to the torch antechamber, the long way the
@@ -591,7 +596,7 @@ tickInput g book input = do
             | otherwise =
                 fmap (\c -> signum c * min playerSpeed (abs c)) (snapTarget f p - p)
       set (gamePlayer g) $
-        Position (moveAndCollide tm bodyHalf p delta)
+        Position (moveAndCollideCentered tm bodyHalf p delta)
       forM_ [dir | dir /= V2 0 0] $ \d ->
         set (gamePlayer g) (Facing d)
       forM_ (quickSlot book input) (startCastAt (gamePlayer g) ticksPerInstr)
@@ -599,9 +604,9 @@ tickInput g book input = do
 -- | Where the player settles when movement input stops: per axis, the next
 -- tile center along the last motion direction — never behind, so stopping
 -- reads as carrying momentum forward, not hopping back. An axis that wasn't
--- moving keeps its containing tile's center. A forward center blocked by a
--- wall (the player walked flush into it) just leaves the glide stopped
--- against the wall.
+-- moving keeps its containing tile's center. A wall-ward walk already stops
+-- on the last open tile's center ('moveAndCollideCentered'), which is a
+-- fixed point of the forward snap, so a stop against a wall stays put.
 snapTarget :: V2 Int -> V2 Int -> V2 Int
 snapTarget dir p = snapAxis <$> dir <*> p
   where
