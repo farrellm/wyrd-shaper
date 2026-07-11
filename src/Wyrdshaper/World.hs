@@ -19,6 +19,7 @@ module Wyrdshaper.World
     Invuln (..),
     Torch (..),
     Anim (..),
+    Corpse (..),
 
     -- * World
     World,
@@ -138,6 +139,14 @@ data Anim = Anim !(V2 Int) !Int !Bool
 
 instance Component Anim where type Storage Anim = Map Anim
 
+-- | A slain monster's departing ghost — purely visual. Carries what the
+-- die-sheet frame needs (the victim's kind, facing, and variant salt) and
+-- the ticks of rise-and-fade left. Deliberately no 'Faction', 'Enemy', or
+-- 'Health': targeting, bolts, and AI must never see a corpse.
+data Corpse = Corpse !EnemyKind !(V2 Int) !Int !Int
+
+instance Component Corpse where type Storage Corpse = Map Corpse
+
 makeWorld
   "World"
   [ ''Position,
@@ -152,7 +161,8 @@ makeWorld
     ''HitFlash,
     ''Invuln,
     ''Torch,
-    ''Anim
+    ''Anim,
+    ''Corpse
   ]
 
 type System' a = SystemT World IO a
@@ -168,7 +178,7 @@ type AllComponents =
     Casting,
     Projectile,
     Health,
-    (Burning, Faction, Enemy, HitFlash, Invuln, Torch, Anim)
+    (Burning, Faction, Enemy, HitFlash, Invuln, Torch, Anim, Corpse)
   )
 
 -- | Fully delete an entity. The only way game code should despawn anything.

@@ -13,8 +13,11 @@
 -- The heroes pack lives here too: 'sorcererSprite' picks the player's
 -- frame from the Sorcerer sheets (96x96 cells at 2x — the body art inside
 -- is about a tile, the rest is margin). The enemies' asset_pack monster
--- sheets ('skeletonSprite', 'cultistSprite', 'mushySprite') are 4x4 grids
--- of 32x32 cells with the same facing rows.
+-- art is a 'MobArt' sheet set per color variant: idle\/walk\/hit\/die are
+-- grids of 32x32 cells with the same facing rows, and the attack sheets
+-- are 5x4 grids of 96x112 cells — the body sits in the cell's central
+-- 32x32 box (x 32..64, y 32..64), everything else is baked-in effect
+-- overhang, so strike frames anchor by that box, not the cell.
 module Wyrdshaper.Terrain
   ( Terrain,
     loadTerrain,
@@ -24,9 +27,14 @@ module Wyrdshaper.Terrain
     torchSprite,
     sorcererSprite,
     sorcererShadow,
-    skeletonSprite,
-    cultistSprite,
-    mushySprite,
+    MobArt,
+    banditArt,
+    cultistArt,
+    mushyArt,
+    mobSprite,
+    mobHitSprite,
+    mobStrikeSprite,
+    mobGhostSprite,
   )
 where
 
@@ -72,10 +80,19 @@ data Terrain = Terrain
     txSorcCast :: Texture,
     txSorcDeath :: Texture,
     txSorcShadow :: Texture,
-    -- asset_pack monsters (idle, walk) per color variant
-    txSkeleton :: [(Texture, Texture)],
-    txCultist :: [(Texture, Texture)],
-    txMushyIdle :: [Texture]
+    -- asset_pack monsters, one sheet set per color variant
+    txBandit :: [MobArt],
+    txCultist :: [MobArt],
+    txMushy :: [MobArt]
+  }
+
+-- | One monster color variant's full sheet set.
+data MobArt = MobArt
+  { mobIdle :: Texture,
+    mobWalk :: Texture,
+    mobAttack :: Texture,
+    mobHit :: Texture,
+    mobDie :: Texture
   }
 
 -- | Load every sheet. Fails fast with a pointer at the gitignored
@@ -89,7 +106,13 @@ loadTerrain gfx = do
       hp p = "assets/heroes_pack/2x/Character sprites/Sorcerer/" ++ p
       mp p = "assets/asset_pack/2x/Monsters and animals/" ++ p
       load = loadTexture gfx
-      loadPair idle walk = (,) <$> load idle <*> load walk
+      loadMob prefix suffix =
+        MobArt
+          <$> load (mp (prefix ++ "_idle" ++ suffix ++ ".png"))
+          <*> load (mp (prefix ++ "_walk" ++ suffix ++ ".png"))
+          <*> load (mp (prefix ++ "_attack.png"))
+          <*> load (mp (prefix ++ "_hit.png"))
+          <*> load (mp (prefix ++ "_die.png"))
   txGrass' <- load (ap "Grass.png")
   txCoast' <- load (ap "Coastlines.png")
   txRoad' <- load (ap "Roads_stone.png")
@@ -117,16 +140,12 @@ loadTerrain gfx = do
   txSorcCast' <- load (hp "Sorcerer_cast.png")
   txSorcDeath' <- load (hp "Sorcerer_death.png")
   txSorcShadow' <- load (hp "Shadow.png")
-  txSkeleton' <- forM ["01", "02", "03"] $ \n ->
-    loadPair
-      (mp ("Skeleton " ++ n ++ "_idle (32x32).png"))
-      (mp ("Skeleton " ++ n ++ "_walk (32x32).png"))
+  txBandit' <- forM ["01", "02", "03", "04"] $ \n ->
+    loadMob ("Extras/Bandit" ++ n) ""
   txCultist' <- forM ["01", "02", "03"] $ \n ->
-    loadPair
-      (mp ("Extras/Cultist" ++ n ++ "_idle.png"))
-      (mp ("Extras/Cultist" ++ n ++ "_walk.png"))
-  txMushyIdle' <- forM ["01", "02", "03", "04"] $ \n ->
-    load (mp ("Mushy " ++ n ++ "_idle (32x32).png"))
+    loadMob ("Extras/Cultist" ++ n) ""
+  txMushy' <- forM ["01", "02", "03", "04"] $ \n ->
+    loadMob ("Mushy " ++ n) " (32x32)"
   pure
     Terrain
       { txGrass = txGrass',
@@ -153,9 +172,9 @@ loadTerrain gfx = do
         txSorcCast = txSorcCast',
         txSorcDeath = txSorcDeath',
         txSorcShadow = txSorcShadow',
-        txSkeleton = txSkeleton',
+        txBandit = txBandit',
         txCultist = txCultist',
-        txMushyIdle = txMushyIdle'
+        txMushy = txMushy'
       }
 
 -- | A whole single-texture sprite (the one-tile PNGs).
@@ -312,34 +331,61 @@ sorcererSprite tr (V2 fx fy) dead casting moving clock =
 sorcererShadow :: Terrain -> SpriteDraw
 sorcererShadow tr = SpriteDraw (txSorcShadow tr) (V2 0 0) (V2 20 6) Nothing
 
--- | A monster frame from the asset_pack sheets: 4x4 grids of 32x32 cells,
--- rows the same down\/left\/right\/up facings as the heroes pack, columns
--- the animation frames. @variant@ is any per-entity stable salt (the
--- entity id) — 'mix64' of it picks the sheet's color variant.
-mobSprite :: [(Texture, Texture)] -> Int -> V2 Int -> Bool -> Int -> Maybe Color -> SpriteDraw
-mobSprite sheets variant (V2 fx fy) moving clock =
-  SpriteDraw sheet ((* tileSize) <$> V2 col row) (V2 tileSize tileSize)
+-- | The enemy kinds' sheet sets: Chasers are Bandits, Hexers Cultists,
+-- target dummies Mushys. ('Terrain' stays abstract; enemy kinds live in
+-- World, which this module must not import.)
+banditArt, cultistArt, mushyArt :: Terrain -> [MobArt]
+banditArt = txBandit
+cultistArt = txCultist
+mushyArt = txMushy
+
+-- | Pick a mob's color variant: 'mix64' on any per-entity stable salt
+-- (the entity id) — stateless, like the tile variants.
+mobVariant :: [MobArt] -> Int -> MobArt
+mobVariant arts salt =
+  arts !! (fromIntegral (mix64 (fromIntegral salt)) `mod` length arts)
+
+-- | The shared facing-to-sheet-row mapping (down\/left\/right\/up;
+-- diagonals show the side view, like 'sorcererSprite').
+mobRow :: V2 Int -> Int
+mobRow (V2 fx fy)
+  | fx < 0 = 1
+  | fx > 0 = 2
+  | fy > 0 = 3
+  | otherwise = 0
+
+-- | A monster's idle\/walk frame off a free-running tick clock.
+mobSprite :: [MobArt] -> Int -> V2 Int -> Bool -> Int -> Maybe Color -> SpriteDraw
+mobSprite arts salt facing moving clock =
+  cell sheet (V2 col (mobRow facing))
   where
-    (idleTx, walkTx) =
-      sheets !! (fromIntegral (mix64 (fromIntegral variant)) `mod` length sheets)
+    art = mobVariant arts salt
     (sheet, col)
-      | moving = (walkTx, (clock `div` 8) `mod` 4)
-      | otherwise = (idleTx, (clock `div` 20) `mod` 4)
-    row
-      | fx < 0 = 1
-      | fx > 0 = 2
-      | fy > 0 = 3
-      | otherwise = 0
+      | moving = (mobWalk art, (clock `div` 8) `mod` 4)
+      | otherwise = (mobIdle art, (clock `div` 20) `mod` 4)
 
--- | The Chaser's Skeleton.
-skeletonSprite :: Terrain -> Int -> V2 Int -> Bool -> Int -> Maybe Color -> SpriteDraw
-skeletonSprite tr = mobSprite (txSkeleton tr)
+-- | The two-frame flinch while 'HitFlash' counts down @n@: the sheet's
+-- red-flashed silhouette first, the recoil pose for the last ticks. No
+-- tint parameter — the flash is painted into the art.
+mobHitSprite :: [MobArt] -> Int -> V2 Int -> Int -> SpriteDraw
+mobHitSprite arts salt facing n =
+  cell (mobHit (mobVariant arts salt)) (V2 (if n > 6 then 0 else 1) (mobRow facing)) Nothing
 
--- | The Hexer's Cultist.
-cultistSprite :: Terrain -> Int -> V2 Int -> Bool -> Int -> Maybe Color -> SpriteDraw
-cultistSprite tr = mobSprite (txCultist tr)
+-- | A strike frame: the attack sheets are 5x4 grids of 96x112 cells, the
+-- body in the central 32x32 box, the baked-in effects overhanging it.
+-- @elapsed@ ticks into the strike pick the column, 4 ticks a frame,
+-- holding the last. Anchor by the body box, not the cell (the caller
+-- offsets the oversized dest rect).
+mobStrikeSprite :: [MobArt] -> Int -> V2 Int -> Int -> SpriteDraw
+mobStrikeSprite arts salt facing elapsed =
+  SpriteDraw
+    (mobAttack (mobVariant arts salt))
+    (V2 (96 * min 4 (elapsed `div` 4)) (112 * mobRow facing))
+    (V2 96 112)
+    Nothing
 
--- | The target dummy's Mushy: idle sheet only, always facing the camera.
-mushySprite :: Terrain -> Int -> Int -> Maybe Color -> SpriteDraw
-mushySprite tr variant clock =
-  mobSprite (map (\t -> (t, t)) (txMushyIdle tr)) variant (V2 0 (-1)) False clock
+-- | The die sheets' pale ghost, one frame per facing; the caller animates
+-- the rise and the fade (via the tint's alpha).
+mobGhostSprite :: [MobArt] -> Int -> V2 Int -> Maybe Color -> SpriteDraw
+mobGhostSprite arts salt facing =
+  cell (mobDie (mobVariant arts salt)) (V2 0 (mobRow facing))
