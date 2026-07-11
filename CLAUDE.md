@@ -18,7 +18,9 @@ from `assets/ui_pack/Fonts/`, and `Terrain.loadTerrain` loads the terrain
 sheets from the Franuka packs' **2x (32x32)** variants (`asset_pack/2x/`,
 `desert_pack/2x (32x32)/`, `castles_pack/2x (32x32)/`,
 `dungeons_fire_pack/2x (32x32)/` — the 2x directory naming varies per
-pack) plus the player's Sorcerer sheets from
+pack), the enemies' monster sheets from
+`asset_pack/2x/Monsters and animals/` (Skeleton, Cultist, Mushy — 4x4
+grids of 32x32 cells), plus the player's Sorcerer sheets from
 `heroes_pack/2x/Character sprites/Sorcerer/` (the heroes pack's 2x cell is
 **96x96**, not 32 — the body art inside is about a tile, the rest margin);
 startup fails without any of them. 2x art is 1:1 with the 32px tile
@@ -158,7 +160,14 @@ warning-free).
   The heroes pack lives here too: `sorcererSprite` picks the player's
   96x96 cell (rows are facings down/left/right/up, columns frames; death >
   cast > walk > idle) off the `Anim` component's free-running tick clock,
-  and `sorcererShadow` is the drop-shadow blob under it.
+  and `sorcererShadow` is the drop-shadow blob under it. The enemies'
+  asset_pack monster sheets (`skeletonSprite` for Chasers, `cultistSprite`
+  for Hexers, `mushySprite` for Dummies) are 4x4 grids of 32x32 cells with
+  the same facing rows; each takes a per-entity salt (the entity id) that
+  `mix64`-picks the sheet's color variant, keeping Terrain free of any
+  `World` import. Their idle/walk sheets are clean grids — the packs'
+  attack/hit/die sheets have irregular geometry with baked-in effect
+  overlays, so don't use those.
   Beware Franuka sheet cells that look like ground but are transparent
   decals (e.g. `Stone tile.png`, `Sand_variations.png` rows 0-1 cols 2-3):
   check cell alpha before using one as a base.
@@ -251,9 +260,10 @@ warning-free).
   in-world HP/cast bars), torch sprites, bolts, fire, HUD, damage wash; the
   editor panel or game-over veil (when applicable) draws on top of it all,
   and `presentFrame` is called by the loop's draw closure, not by `draw`.
-  Monsters are still flat rects; the player's hurt flash is a red tint
-  (texture color-mod only darkens — white can't flash a sprite) and
-  i-frames blink via alpha.
+  Enemies are asset_pack monster sprites (Skeleton/Cultist/Mushy) over the
+  player's shadow blob, anchored with the same `+ V2 0 4` trick; every
+  sprite's hurt flash is a red tint (texture color-mod only darkens —
+  white can't flash a sprite) and the player's i-frames blink via alpha.
 
 ## apecs / sdl2 notes (apecs 0.10, sdl2 2.5.6)
 

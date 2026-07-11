@@ -12,7 +12,9 @@
 --
 -- The heroes pack lives here too: 'sorcererSprite' picks the player's
 -- frame from the Sorcerer sheets (96x96 cells at 2x — the body art inside
--- is about a tile, the rest is margin).
+-- is about a tile, the rest is margin). The enemies' asset_pack monster
+-- sheets ('skeletonSprite', 'cultistSprite', 'mushySprite') are 4x4 grids
+-- of 32x32 cells with the same facing rows.
 module Wyrdshaper.Terrain
   ( Terrain,
     loadTerrain,
@@ -22,9 +24,13 @@ module Wyrdshaper.Terrain
     torchSprite,
     sorcererSprite,
     sorcererShadow,
+    skeletonSprite,
+    cultistSprite,
+    mushySprite,
   )
 where
 
+import Control.Monad (forM)
 import Data.Word (Word64)
 import Linear (V2 (..))
 import Wyrdshaper.Engine (Color (..), Gfx, Texture, loadTexture)
@@ -65,7 +71,11 @@ data Terrain = Terrain
     txSorcWalk :: Texture,
     txSorcCast :: Texture,
     txSorcDeath :: Texture,
-    txSorcShadow :: Texture
+    txSorcShadow :: Texture,
+    -- asset_pack monsters (idle, walk) per color variant
+    txSkeleton :: [(Texture, Texture)],
+    txCultist :: [(Texture, Texture)],
+    txMushyIdle :: [Texture]
   }
 
 -- | Load every sheet. Fails fast with a pointer at the gitignored
@@ -77,7 +87,9 @@ loadTerrain gfx = do
       cp p = "assets/castles_pack/2x (32x32)/Tiles/" ++ p
       fp p = "assets/dungeons_fire_pack/2x (32x32)/" ++ p
       hp p = "assets/heroes_pack/2x/Character sprites/Sorcerer/" ++ p
+      mp p = "assets/asset_pack/2x/Monsters and animals/" ++ p
       load = loadTexture gfx
+      loadPair idle walk = (,) <$> load idle <*> load walk
   txGrass' <- load (ap "Grass.png")
   txCoast' <- load (ap "Coastlines.png")
   txRoad' <- load (ap "Roads_stone.png")
@@ -105,6 +117,16 @@ loadTerrain gfx = do
   txSorcCast' <- load (hp "Sorcerer_cast.png")
   txSorcDeath' <- load (hp "Sorcerer_death.png")
   txSorcShadow' <- load (hp "Shadow.png")
+  txSkeleton' <- forM ["01", "02", "03"] $ \n ->
+    loadPair
+      (mp ("Skeleton " ++ n ++ "_idle (32x32).png"))
+      (mp ("Skeleton " ++ n ++ "_walk (32x32).png"))
+  txCultist' <- forM ["01", "02", "03"] $ \n ->
+    loadPair
+      (mp ("Extras/Cultist" ++ n ++ "_idle.png"))
+      (mp ("Extras/Cultist" ++ n ++ "_walk.png"))
+  txMushyIdle' <- forM ["01", "02", "03", "04"] $ \n ->
+    load (mp ("Mushy " ++ n ++ "_idle (32x32).png"))
   pure
     Terrain
       { txGrass = txGrass',
@@ -130,7 +152,10 @@ loadTerrain gfx = do
         txSorcWalk = txSorcWalk',
         txSorcCast = txSorcCast',
         txSorcDeath = txSorcDeath',
-        txSorcShadow = txSorcShadow'
+        txSorcShadow = txSorcShadow',
+        txSkeleton = txSkeleton',
+        txCultist = txCultist',
+        txMushyIdle = txMushyIdle'
       }
 
 -- | A whole single-texture sprite (the one-tile PNGs).
@@ -286,3 +311,35 @@ sorcererSprite tr (V2 fx fy) dead casting moving clock =
 -- the world size).
 sorcererShadow :: Terrain -> SpriteDraw
 sorcererShadow tr = SpriteDraw (txSorcShadow tr) (V2 0 0) (V2 20 6) Nothing
+
+-- | A monster frame from the asset_pack sheets: 4x4 grids of 32x32 cells,
+-- rows the same down\/left\/right\/up facings as the heroes pack, columns
+-- the animation frames. @variant@ is any per-entity stable salt (the
+-- entity id) — 'mix64' of it picks the sheet's color variant.
+mobSprite :: [(Texture, Texture)] -> Int -> V2 Int -> Bool -> Int -> Maybe Color -> SpriteDraw
+mobSprite sheets variant (V2 fx fy) moving clock =
+  SpriteDraw sheet ((* tileSize) <$> V2 col row) (V2 tileSize tileSize)
+  where
+    (idleTx, walkTx) =
+      sheets !! (fromIntegral (mix64 (fromIntegral variant)) `mod` length sheets)
+    (sheet, col)
+      | moving = (walkTx, (clock `div` 8) `mod` 4)
+      | otherwise = (idleTx, (clock `div` 20) `mod` 4)
+    row
+      | fx < 0 = 1
+      | fx > 0 = 2
+      | fy > 0 = 3
+      | otherwise = 0
+
+-- | The Chaser's Skeleton.
+skeletonSprite :: Terrain -> Int -> V2 Int -> Bool -> Int -> Maybe Color -> SpriteDraw
+skeletonSprite tr = mobSprite (txSkeleton tr)
+
+-- | The Hexer's Cultist.
+cultistSprite :: Terrain -> Int -> V2 Int -> Bool -> Int -> Maybe Color -> SpriteDraw
+cultistSprite tr = mobSprite (txCultist tr)
+
+-- | The target dummy's Mushy: idle sheet only, always facing the camera.
+mushySprite :: Terrain -> Int -> Int -> Maybe Color -> SpriteDraw
+mushySprite tr variant clock =
+  mobSprite (map (\t -> (t, t)) (txMushyIdle tr)) variant (V2 0 (-1)) False clock

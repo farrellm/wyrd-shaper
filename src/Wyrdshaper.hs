@@ -450,7 +450,14 @@ spawnOverworldFoes g = do
 
   -- Target dummies on open tiles of the starting room.
   forM_ [V2 18 15, V2 10 13, V2 20 17] $ \txy ->
-    newEntity_ (Position (tileCenter (stamped txy)), Health dummyMaxHP dummyMaxHP, FEnemy, Enemy Dummy 0)
+    newEntity_
+      ( Position (tileCenter (stamped txy)),
+        Health dummyMaxHP dummyMaxHP,
+        FEnemy,
+        Enemy Dummy 0,
+        Facing (V2 0 (-1)),
+        Anim (tileCenter (stamped txy)) (spawnClock (stamped txy)) False
+      )
 
   -- Enemies north of the start room, all outside aggro range of the start
   -- tile so the start room stays a safe workshop until the player leaves.
@@ -510,9 +517,16 @@ spawnFoe kind hp txy = do
         Health hp hp,
         FEnemy,
         Enemy kind 0,
-        Facing (V2 0 (-1))
+        Facing (V2 0 (-1)),
+        Anim (tileCenter txy) (spawnClock txy) False
       )
   when (kind == Hexer) $ set e (Mana enemyManaMax enemyManaMax 0)
+
+-- | Phase a spawn's free-running animation clock off its tile so mobs
+-- don't bob and march in lockstep.
+spawnClock :: V2 Int -> Int
+spawnClock (V2 x y) =
+  fromIntegral (mix64 (mix64 (fromIntegral x) + fromIntegral y)) `mod` 80
 
 -- | Once-per-frame UI input: opening, driving, and closing the editor.
 -- Runs off the frame, not the tick — see 'Wyrdshaper.Loop.runLoop'. Needs
@@ -648,7 +662,8 @@ tickEnemies g = do
   cmapM_ $ \(Enemy kind cd, Position p, e) -> case kind of
     Dummy -> pure ()
     Chaser -> do
-      when (quadrance (pp - p) <= chaserAggro * chaserAggro) $
+      when (quadrance (pp - p) <= chaserAggro * chaserAggro) $ do
+        set e (Facing (signum <$> (pp - p)))
         set e (Position (moveAndCollide tm bodyHalf p (velToward enemySpeed p pp)))
       Position p' <- get e
       let V2 dx dy = abs <$> (pp - p')
@@ -959,18 +974,25 @@ draw gfx terrain g = do
   drawWorldSprite gfx cam (p + V2 0 (-12)) shSize shTex shSrc shSize shTint
   drawWorldSprite gfx cam (p + V2 0 4) pSize pTex pSrc pSize pTint
 
-  -- Enemies (dummies included), with hurt-only HP bars and, while one is
-  -- channeling, the gold cast bar that telegraphs the interrupt window.
-  cmapM_ $ \(Enemy kind _, Health cur maxHp, Position ep, e) -> do
+  -- Enemies (dummies included) as asset_pack monsters over the same drop
+  -- shadow as the player: Skeleton chasers, Cultist hexers, Mushy dummies,
+  -- the color variant hashed off the entity id. Hurt flashes the red tint
+  -- (like the player — color-mod can't whiten). Hurt-only HP bars and,
+  -- while one is channeling, the gold cast bar that telegraphs the
+  -- interrupt window.
+  let SpriteDraw mshTex mshSrc mshSize mshTint = sorcererShadow terrain
+  cmapM_ $ \(Enemy kind _, Health cur maxHp, Position ep, Facing eface, Anim _ eclock emoving, e) -> do
     mf <- get e
-    let base = case kind of
-          Dummy -> Color 0.62 0.45 0.25 1
-          Chaser -> Color 0.75 0.15 0.15 1
-          Hexer -> Color 0.55 0.25 0.75 1
-        col = case mf :: Maybe HitFlash of
-          Just _ -> Color 1 1 1 1
-          Nothing -> base
-    fillWorldRect gfx cam ep (V2 24 24) col
+    let tint = case mf :: Maybe HitFlash of
+          Just _ -> Just (Color 1 0.35 0.35 1)
+          Nothing -> Nothing
+        Entity eid = e
+        SpriteDraw eTex eSrc eSize eTint = case kind of
+          Dummy -> mushySprite terrain eid eclock tint
+          Chaser -> skeletonSprite terrain eid eface emoving eclock tint
+          Hexer -> cultistSprite terrain eid eface emoving eclock tint
+    drawWorldSprite gfx cam (ep + V2 0 (-10)) mshSize mshTex mshSrc mshSize mshTint
+    drawWorldSprite gfx cam (ep + V2 0 4) eSize eTex eSrc eSize eTint
     when (cur < maxHp) $
       drawWorldBar gfx cam (ep + V2 0 20) (fromIntegral cur / fromIntegral maxHp) (Color 0.85 0.2 0.2 1)
     mc <- get e
