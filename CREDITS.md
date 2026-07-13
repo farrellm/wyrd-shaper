@@ -18,3 +18,6 @@ redistributed, so supply them locally):
   [Franuka](https://franuka.itch.io/) — dungeon floors, walls, stairs, the
   door, the summoning circle, and torches
   (`assets/dungeons_fire_pack/`). Same terms.
+- **Fantasy RPG — Heroes pack** by [Franuka](https://franuka.itch.io/) —
+  the player's Sorcerer sprites and drop shadow
+  (`assets/heroes_pack/`). Same terms.

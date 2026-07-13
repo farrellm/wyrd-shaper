@@ -9,6 +9,15 @@
 -- randomness. Oversized 2x2-art decorations (the dungeon door and the
 -- shrine circle) are a separate pass ('tileDecor') so they can overlap
 -- neighboring tiles *after* those tiles' bases have painted.
+--
+-- The heroes pack lives here too: 'sorcererSprite' picks the player's
+-- frame from the Sorcerer sheets (96x96 cells at 2x — the body art inside
+-- is about a tile, the rest is margin). The enemies' asset_pack monster
+-- art is a 'MobArt' sheet set per color variant: idle\/walk\/hit\/die are
+-- grids of 32x32 cells with the same facing rows, and the attack sheets
+-- are 5x4 grids of 96x112 cells — the body sits in the cell's central
+-- 32x32 box (x 32..64, y 32..64), everything else is baked-in effect
+-- overhang, so strike frames anchor by that box, not the cell.
 module Wyrdshaper.Terrain
   ( Terrain,
     loadTerrain,
@@ -16,9 +25,20 @@ module Wyrdshaper.Terrain
     tileSprites,
     tileDecor,
     torchSprite,
+    sorcererSprite,
+    sorcererShadow,
+    MobArt,
+    banditArt,
+    cultistArt,
+    mushyArt,
+    mobSprite,
+    mobHitSprite,
+    mobStrikeSprite,
+    mobGhostSprite,
   )
 where
 
+import Control.Monad (forM)
 import Data.Word (Word64)
 import Linear (V2 (..))
 import Wyrdshaper.Engine (Color (..), Gfx, Texture, loadTexture)
@@ -53,7 +73,26 @@ data Terrain = Terrain
     txDoorOpen :: Texture,
     txCircle :: Texture,
     txTorchOff :: Texture,
-    txTorchOn :: Texture
+    txTorchOn :: Texture,
+    -- heroes_pack (the player)
+    txSorcIdle :: Texture,
+    txSorcWalk :: Texture,
+    txSorcCast :: Texture,
+    txSorcDeath :: Texture,
+    txSorcShadow :: Texture,
+    -- asset_pack monsters, one sheet set per color variant
+    txBandit :: [MobArt],
+    txCultist :: [MobArt],
+    txMushy :: [MobArt]
+  }
+
+-- | One monster color variant's full sheet set.
+data MobArt = MobArt
+  { mobIdle :: Texture,
+    mobWalk :: Texture,
+    mobAttack :: Texture,
+    mobHit :: Texture,
+    mobDie :: Texture
   }
 
 -- | Load every sheet. Fails fast with a pointer at the gitignored
@@ -64,7 +103,16 @@ loadTerrain gfx = do
       dp p = "assets/desert_pack/2x (32x32)/Tileset/" ++ p
       cp p = "assets/castles_pack/2x (32x32)/Tiles/" ++ p
       fp p = "assets/dungeons_fire_pack/2x (32x32)/" ++ p
+      hp p = "assets/heroes_pack/2x/Character sprites/Sorcerer/" ++ p
+      mp p = "assets/asset_pack/2x/Monsters and animals/" ++ p
       load = loadTexture gfx
+      loadMob prefix suffix =
+        MobArt
+          <$> load (mp (prefix ++ "_idle" ++ suffix ++ ".png"))
+          <*> load (mp (prefix ++ "_walk" ++ suffix ++ ".png"))
+          <*> load (mp (prefix ++ "_attack.png"))
+          <*> load (mp (prefix ++ "_hit.png"))
+          <*> load (mp (prefix ++ "_die.png"))
   txGrass' <- load (ap "Grass.png")
   txCoast' <- load (ap "Coastlines.png")
   txRoad' <- load (ap "Roads_stone.png")
@@ -87,6 +135,17 @@ loadTerrain gfx = do
   txCircle' <- load (fp "Objects & Decoration/SummoningCircle_Off.png")
   txTorchOff' <- load (fp "Objects & Decoration/Torch_Floor_Off.png")
   txTorchOn' <- load (fp "Objects & Decoration/Torch_Floor_On.png")
+  txSorcIdle' <- load (hp "Sorcerer_idle.png")
+  txSorcWalk' <- load (hp "Sorcerer_walk.png")
+  txSorcCast' <- load (hp "Sorcerer_cast.png")
+  txSorcDeath' <- load (hp "Sorcerer_death.png")
+  txSorcShadow' <- load (hp "Shadow.png")
+  txBandit' <- forM ["01", "02", "03", "04"] $ \n ->
+    loadMob ("Extras/Bandit" ++ n) ""
+  txCultist' <- forM ["01", "02", "03"] $ \n ->
+    loadMob ("Extras/Cultist" ++ n) ""
+  txMushy' <- forM ["01", "02", "03", "04"] $ \n ->
+    loadMob ("Mushy " ++ n) " (32x32)"
   pure
     Terrain
       { txGrass = txGrass',
@@ -107,7 +166,15 @@ loadTerrain gfx = do
         txDoorOpen = txDoorOpen',
         txCircle = txCircle',
         txTorchOff = txTorchOff',
-        txTorchOn = txTorchOn'
+        txTorchOn = txTorchOn',
+        txSorcIdle = txSorcIdle',
+        txSorcWalk = txSorcWalk',
+        txSorcCast = txSorcCast',
+        txSorcDeath = txSorcDeath',
+        txSorcShadow = txSorcShadow',
+        txBandit = txBandit',
+        txCultist = txCultist',
+        txMushy = txMushy'
       }
 
 -- | A whole single-texture sprite (the one-tile PNGs).
@@ -235,3 +302,90 @@ torchSprite :: Terrain -> Int -> SpriteDraw
 torchSprite tr lit
   | lit <= 0 = whole (txTorchOff tr) Nothing
   | otherwise = cell (txTorchOn tr) (V2 ((lit `div` 8) `mod` 4) 0) Nothing
+
+-- | The heroes pack's sheet cell: 96x96 at 2x. Rows are facings, top to
+-- bottom down\/left\/right\/up; columns are the animation frames.
+heroCell :: Int
+heroCell = 96
+
+-- | The player's Sorcerer frame: the death sprawl beats the cast pose
+-- beats the walk cycle beats the idle bob; @clock@ (a free-running tick
+-- counter) phases the cycling sheets. Diagonal facings show the side view.
+sorcererSprite :: Terrain -> V2 Int -> Bool -> Bool -> Bool -> Int -> Maybe Color -> SpriteDraw
+sorcererSprite tr (V2 fx fy) dead casting moving clock =
+  SpriteDraw sheet ((* heroCell) <$> V2 col row) (V2 heroCell heroCell)
+  where
+    (sheet, col)
+      | dead = (txSorcDeath tr, 7)
+      | casting = (txSorcCast tr, 0)
+      | moving = (txSorcWalk tr, (clock `div` 8) `mod` 4)
+      | otherwise = (txSorcIdle tr, (clock `div` 20) `mod` 4)
+    row
+      | fx < 0 = 1
+      | fx > 0 = 2
+      | fy > 0 = 3
+      | otherwise = 0
+
+-- | The drop-shadow blob under the Sorcerer (blit 1:1 — its source size is
+-- the world size).
+sorcererShadow :: Terrain -> SpriteDraw
+sorcererShadow tr = SpriteDraw (txSorcShadow tr) (V2 0 0) (V2 20 6) Nothing
+
+-- | The enemy kinds' sheet sets: Chasers are Bandits, Hexers Cultists,
+-- target dummies Mushys. ('Terrain' stays abstract; enemy kinds live in
+-- World, which this module must not import.)
+banditArt, cultistArt, mushyArt :: Terrain -> [MobArt]
+banditArt = txBandit
+cultistArt = txCultist
+mushyArt = txMushy
+
+-- | Pick a mob's color variant: 'mix64' on any per-entity stable salt
+-- (the entity id) — stateless, like the tile variants.
+mobVariant :: [MobArt] -> Int -> MobArt
+mobVariant arts salt =
+  arts !! (fromIntegral (mix64 (fromIntegral salt)) `mod` length arts)
+
+-- | The shared facing-to-sheet-row mapping (down\/left\/right\/up;
+-- diagonals show the side view, like 'sorcererSprite').
+mobRow :: V2 Int -> Int
+mobRow (V2 fx fy)
+  | fx < 0 = 1
+  | fx > 0 = 2
+  | fy > 0 = 3
+  | otherwise = 0
+
+-- | A monster's idle\/walk frame off a free-running tick clock.
+mobSprite :: [MobArt] -> Int -> V2 Int -> Bool -> Int -> Maybe Color -> SpriteDraw
+mobSprite arts salt facing moving clock =
+  cell sheet (V2 col (mobRow facing))
+  where
+    art = mobVariant arts salt
+    (sheet, col)
+      | moving = (mobWalk art, (clock `div` 8) `mod` 4)
+      | otherwise = (mobIdle art, (clock `div` 20) `mod` 4)
+
+-- | The two-frame flinch while 'HitFlash' counts down @n@: the sheet's
+-- red-flashed silhouette first, the recoil pose for the last ticks. No
+-- tint parameter — the flash is painted into the art.
+mobHitSprite :: [MobArt] -> Int -> V2 Int -> Int -> SpriteDraw
+mobHitSprite arts salt facing n =
+  cell (mobHit (mobVariant arts salt)) (V2 (if n > 6 then 0 else 1) (mobRow facing)) Nothing
+
+-- | A strike frame: the attack sheets are 5x4 grids of 96x112 cells, the
+-- body in the central 32x32 box, the baked-in effects overhanging it.
+-- @elapsed@ ticks into the strike pick the column, 4 ticks a frame,
+-- holding the last. Anchor by the body box, not the cell (the caller
+-- offsets the oversized dest rect).
+mobStrikeSprite :: [MobArt] -> Int -> V2 Int -> Int -> SpriteDraw
+mobStrikeSprite arts salt facing elapsed =
+  SpriteDraw
+    (mobAttack (mobVariant arts salt))
+    (V2 (96 * min 4 (elapsed `div` 4)) (112 * mobRow facing))
+    (V2 96 112)
+    Nothing
+
+-- | The die sheets' pale ghost, one frame per facing; the caller animates
+-- the rise and the fade (via the tint's alpha).
+mobGhostSprite :: [MobArt] -> Int -> V2 Int -> Maybe Color -> SpriteDraw
+mobGhostSprite arts salt facing =
+  cell (mobDie (mobVariant arts salt)) (V2 0 (mobRow facing))

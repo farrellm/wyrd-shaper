@@ -12,7 +12,7 @@ import Apecs
 import Control.Monad (forM_, unless, when)
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (find)
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isJust)
 import Linear (V2 (..), quadrance)
 import System.Environment (lookupEnv)
 import System.IO (hPutStrLn, stderr)
@@ -436,7 +436,8 @@ spawnLevel g = do
       Mana manaMax manaMax 0,
       Facing (V2 0 (-1)),
       Health playerMaxHP playerMaxHP,
-      FPlayer
+      FPlayer,
+      Anim (owStart ow) 0 False
     )
   spawnOverworldFoes g
 
@@ -449,7 +450,14 @@ spawnOverworldFoes g = do
 
   -- Target dummies on open tiles of the starting room.
   forM_ [V2 18 15, V2 10 13, V2 20 17] $ \txy ->
-    newEntity_ (Position (tileCenter (stamped txy)), Health dummyMaxHP dummyMaxHP, FEnemy, Enemy Dummy 0)
+    newEntity_
+      ( Position (tileCenter (stamped txy)),
+        Health dummyMaxHP dummyMaxHP,
+        FEnemy,
+        Enemy Dummy 0,
+        Facing (V2 0 (-1)),
+        Anim (tileCenter (stamped txy)) (spawnClock (stamped txy)) False
+      )
 
   -- Enemies north of the start room, all outside aggro range of the start
   -- tile so the start room stays a safe workshop until the player leaves.
@@ -509,9 +517,16 @@ spawnFoe kind hp txy = do
         Health hp hp,
         FEnemy,
         Enemy kind 0,
-        Facing (V2 0 (-1))
+        Facing (V2 0 (-1)),
+        Anim (tileCenter txy) (spawnClock txy) False
       )
   when (kind == Hexer) $ set e (Mana enemyManaMax enemyManaMax 0)
+
+-- | Phase a spawn's free-running animation clock off its tile so mobs
+-- don't bob and march in lockstep.
+spawnClock :: V2 Int -> Int
+spawnClock (V2 x y) =
+  fromIntegral (mix64 (mix64 (fromIntegral x) + fromIntegral y)) `mod` 80
 
 -- | Once-per-frame UI input: opening, driving, and closing the editor.
 -- Runs off the frame, not the tick — see 'Wyrdshaper.Loop.runLoop'. Needs
@@ -570,6 +585,8 @@ tick g book input = do
     tickTorches g
     tickRegen
     tickTimers
+    tickAnim
+    tickCorpses
     tickLevel g
 
 -- | Movement and cast start. Channeling roots the player: no movement, no
@@ -646,7 +663,8 @@ tickEnemies g = do
   cmapM_ $ \(Enemy kind cd, Position p, e) -> case kind of
     Dummy -> pure ()
     Chaser -> do
-      when (quadrance (pp - p) <= chaserAggro * chaserAggro) $
+      when (quadrance (pp - p) <= chaserAggro * chaserAggro) $ do
+        set e (Facing (signum <$> (pp - p)))
         set e (Position (moveAndCollide tm bodyHalf p (velToward enemySpeed p pp)))
       Position p' <- get e
       let V2 dx dy = abs <$> (pp - p')
@@ -808,8 +826,41 @@ hurt g e dmg flashTicks = do
         if cur <= dmg
           then do
             liftIO $ hPutStrLn stderr "combat: enemy slain"
+            spawnCorpse e
             destroyEntity e
           else set e (Health (cur - dmg) maxHp, HitFlash flashTicks)
+
+-- | Ticks a slain monster's ghost takes to rise and fade.
+corpseTicks :: Int
+corpseTicks = 40
+
+-- | Leave a departing ghost where a monster fell. Purely visual: the
+-- 'Corpse' carries only what its die frame needs, so combat never sees it.
+-- Safe inside the damage 'cmapM_'s — members are snapshotted.
+spawnCorpse :: Entity -> System' ()
+spawnCorpse e = do
+  mEnemy <- get e
+  mPos <- get e
+  mFace <- get e
+  forM_ ((,) <$> (mEnemy :: Maybe Enemy) <*> (mPos :: Maybe Position)) $
+    \(Enemy kind _, Position p) -> do
+      let Facing facing = fromMaybe (Facing (V2 0 (-1))) (mFace :: Maybe Facing)
+          Entity eid = e
+      newEntity_ (Position p, Corpse kind facing eid corpseTicks)
+
+-- | Count the ghosts down and out.
+tickCorpses :: System' ()
+tickCorpses = cmapM_ $ \(Corpse kind facing salt left, e) ->
+  if left <= 1
+    then destroyEntity e
+    else set e (Corpse kind facing salt (left - 1))
+
+-- | Which asset_pack monster each enemy kind draws as.
+mobArtFor :: Terrain -> EnemyKind -> [MobArt]
+mobArtFor terrain kind = case kind of
+  Dummy -> mushyArt terrain
+  Chaser -> banditArt terrain
+  Hexer -> cultistArt terrain
 
 -- | Damage through the combat rules: player i-frames can negate it, and a
 -- hit at or over 'staggerThreshold' on a channeling caster — player or
@@ -884,6 +935,13 @@ tickTimers = do
   cmapM_ $ \(Invuln n, e) ->
     if n <= 1 then destroy e (Proxy @Invuln) else set e (Invuln (n - 1))
 
+-- | Advance every animation clock and note whether its owner moved this
+-- tick. Runs after all movement, and moved-ness comes from comparing
+-- positions, so keys, the snap glide, and shoves all count the same.
+tickAnim :: System' ()
+tickAnim = cmap $ \(Anim prev clock _, Position p) ->
+  Anim p (clock + 1) (p /= prev)
+
 -- | Death is not the end: clear the board and speak the level anew. The
 -- player keeps their entity id (and spellbook); everything else respawns.
 restartGame :: Game -> System' ()
@@ -927,33 +985,69 @@ draw gfx terrain g = do
       forM_ (tileDecor terrain inDungeon txy t) $ \(sd, size, off) ->
         sprite txy size off sd
 
-  -- The player: white while hit-flashing, blinking translucent during
-  -- i-frames, ember orange otherwise.
+  -- The player: the heroes pack Sorcerer over a drop shadow — walk cycle,
+  -- idle bob, the cast pose while channeling, the death sprawl under the
+  -- game-over veil. Texture color-mod only darkens, so the hurt flash is a
+  -- red tint (not the rects' white); i-frames blink translucent. The
+  -- sprite's 96x96 cell is mostly margin: the +4 anchor puts the art's
+  -- feet on the bottom of the 24x24 collision body.
   mFlash <- get (gamePlayer g)
   mInv <- get (gamePlayer g)
-  let playerColor
-        | Just (HitFlash _) <- mFlash :: Maybe HitFlash = Color 1 1 1 1
-        | Just (Invuln n) <- mInv :: Maybe Invuln, odd (n `div` 4) = Color 0.9 0.4 0.1 0.5
-        | otherwise = Color 0.9 0.4 0.1 1
-  fillWorldRect gfx cam p (V2 24 24) playerColor
+  mChant <- get (gamePlayer g)
+  Facing pface <- get (gamePlayer g)
+  Health php _ <- get (gamePlayer g)
+  Anim _ pclock pmoving <- get (gamePlayer g)
+  let playerTint
+        | Just (HitFlash _) <- mFlash :: Maybe HitFlash = Just (Color 1 0.35 0.35 1)
+        | Just (Invuln n) <- mInv :: Maybe Invuln, odd (n `div` 4) = Just (Color 1 1 1 0.5)
+        | otherwise = Nothing
+      chanting = isJust (mChant :: Maybe Casting)
+      SpriteDraw shTex shSrc shSize shTint = sorcererShadow terrain
+      SpriteDraw pTex pSrc pSize pTint =
+        sorcererSprite terrain pface (php <= 0) chanting pmoving pclock playerTint
+  drawWorldSprite gfx cam (p + V2 0 (-12)) shSize shTex shSrc shSize shTint
+  drawWorldSprite gfx cam (p + V2 0 4) pSize pTex pSrc pSize pTint
 
-  -- Enemies (dummies included), with hurt-only HP bars and, while one is
-  -- channeling, the gold cast bar that telegraphs the interrupt window.
-  cmapM_ $ \(Enemy kind _, Health cur maxHp, Position ep, e) -> do
+  -- Enemies (dummies included) as asset_pack monsters over the same drop
+  -- shadow as the player: Bandit chasers, Cultist hexers, Mushy dummies,
+  -- the color variant hashed off the entity id. Frame precedence: the hit
+  -- sheets' two-frame flinch while 'HitFlash' runs (its first frame is the
+  -- red flash, painted into the art) beats the strike (a chaser's first 20
+  -- cooldown ticks after a contact hit, a hexer's looped cast pose) beats
+  -- walk/idle. Strike frames are the oversized 96x112 attack cells with
+  -- baked-in effects: their body box is 8 px above the cell center, so
+  -- they anchor at -4 where the 32x32 frames anchor at +4. Hurt-only HP
+  -- bars and, while one is channeling, the gold cast bar that telegraphs
+  -- the interrupt window.
+  let SpriteDraw mshTex mshSrc mshSize mshTint = sorcererShadow terrain
+  cmapM_ $ \(Enemy kind cd, Health cur maxHp, Position ep, Facing eface, Anim _ eclock emoving, e) -> do
     mf <- get e
-    let base = case kind of
-          Dummy -> Color 0.62 0.45 0.25 1
-          Chaser -> Color 0.75 0.15 0.15 1
-          Hexer -> Color 0.55 0.25 0.75 1
-        col = case mf :: Maybe HitFlash of
-          Just _ -> Color 1 1 1 1
-          Nothing -> base
-    fillWorldRect gfx cam ep (V2 24 24) col
+    mc <- get e
+    let Entity eid = e
+        arts = mobArtFor terrain kind
+        striking = case kind of
+          Chaser | cd > 0, contactCooldownTicks - cd < 20 -> Just (contactCooldownTicks - cd)
+          Hexer | isJust (mc :: Maybe Casting) -> Just ((eclock `div` 4) `mod` 20)
+          _ -> Nothing
+        SpriteDraw eTex eSrc eSize eTint
+          | Just (HitFlash n) <- mf = mobHitSprite arts eid eface n
+          | Just elapsed <- striking = mobStrikeSprite arts eid eface elapsed
+          | otherwise = mobSprite arts eid eface emoving eclock Nothing
+        anchor = if eSize == V2 96 112 then ep + V2 0 (-4) else ep + V2 0 4
+    drawWorldSprite gfx cam (ep + V2 0 (-10)) mshSize mshTex mshSrc mshSize mshTint
+    drawWorldSprite gfx cam anchor eSize eTex eSrc eSize eTint
     when (cur < maxHp) $
       drawWorldBar gfx cam (ep + V2 0 20) (fromIntegral cur / fromIntegral maxHp) (Color 0.85 0.2 0.2 1)
-    mc <- get e
     forM_ (mc :: Maybe Casting) $ \(Casting cs) ->
       drawWorldBar gfx cam (ep + V2 0 27) (castFrac cs) (Color 0.95 0.8 0.3 1)
+
+  -- Slain monsters' ghosts, rising and fading out.
+  cmapM_ $ \(Corpse kind facing salt left, Position ep) -> do
+    let risen = (corpseTicks - left) `div` 3
+        fade = fromIntegral left / fromIntegral corpseTicks
+        SpriteDraw tex src size tint =
+          mobGhostSprite (mobArtFor terrain kind) salt facing (Just (Color 1 1 1 fade))
+    drawWorldSprite gfx cam (ep + V2 0 (4 + risen)) size tex src size tint
 
   -- Torches: cold floor torch when unlit, the burning frames (door-counting
   -- state, not mere ground fire) once kindled.

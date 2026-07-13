@@ -18,7 +18,12 @@ from `assets/ui_pack/Fonts/`, and `Terrain.loadTerrain` loads the terrain
 sheets from the Franuka packs' **2x (32x32)** variants (`asset_pack/2x/`,
 `desert_pack/2x (32x32)/`, `castles_pack/2x (32x32)/`,
 `dungeons_fire_pack/2x (32x32)/` — the 2x directory naming varies per
-pack); startup fails without any of them. 2x art is 1:1 with the 32px tile
+pack), the enemies' monster sheets from
+`asset_pack/2x/Monsters and animals/` (Bandit, Cultist, Mushy — idle,
+walk, attack, hit, and die per color variant), plus the player's Sorcerer sheets from
+`heroes_pack/2x/Character sprites/Sorcerer/` (the heroes pack's 2x cell is
+**96x96**, not 32 — the body art inside is about a tile, the rest margin);
+startup fails without any of them. 2x art is 1:1 with the 32px tile
 grid — nothing on the tile layer is scaled.
 
 ## Commands
@@ -152,6 +157,23 @@ warning-free).
   `tileDecor` pass so it can overlap neighbors after their bases painted;
   `torchSprite` maps a torch's burn-down counter to the off sprite or one
   of four burning frames (the counter doubles as the animation clock).
+  The heroes pack lives here too: `sorcererSprite` picks the player's
+  96x96 cell (rows are facings down/left/right/up, columns frames; death >
+  cast > walk > idle) off the `Anim` component's free-running tick clock,
+  and `sorcererShadow` is the drop-shadow blob under it. The enemies'
+  asset_pack monster art is a `MobArt` sheet set per color variant
+  (`banditArt` for Chasers, `cultistArt` for Hexers, `mushyArt` for
+  Dummies); every `mob*Sprite` takes a per-entity salt (the entity id)
+  that `mix64`-picks the variant, keeping Terrain free of any `World`
+  import. Idle/walk/hit/die are grids of 32x32 cells with the same facing
+  rows (hit = 2-frame flinch whose first frame is the red flash painted
+  into the art; die = one ghost frame per facing). The attack sheets are
+  5x4 grids of **96x112** cells with baked-in effect overlays: the body
+  sits in the cell's central 32x32 box (8 px above the cell center), so
+  strike frames anchor by that box — `Wyrdshaper.draw` offsets the
+  oversized dest rect to `-4` where 32x32 frames sit at `+4`. Use
+  `_attack.png` (effects composited); `_attack_NOhitbox` / `_attack_hitbox`
+  are the split layers.
   Beware Franuka sheet cells that look like ground but are transparent
   decals (e.g. `Stone tile.png`, `Sand_variations.png` rows 0-1 cols 2-3):
   check cell alpha before using one as a base.
@@ -239,12 +261,23 @@ warning-free).
   half-open interval [center − half, center + half).
 - Draw order is explicit and back-to-front in `Wyrdshaper.draw`: tile bases
   (`tileSprites`), oversized tile decor (`tileDecor`, cull widened a tile
-  for overhang, far rows first), player, enemies (with in-world HP/cast
-  bars), torch sprites, bolts, fire, HUD, damage wash; the editor panel or
-  game-over veil (when applicable) draws on top of it all, and
-  `presentFrame` is called by the loop's draw closure, not by `draw`. The
-  player and monsters are still flat rects — terrain only has textures so
-  far.
+  for overhang, far rows first), player (drop shadow, then the Sorcerer
+  sprite anchored feet-to-body-bottom at `p + V2 0 4`), enemies (with
+  in-world HP/cast bars), corpse ghosts, torch sprites, bolts, fire, HUD,
+  damage wash; the
+  editor panel or game-over veil (when applicable) draws on top of it all,
+  and `presentFrame` is called by the loop's draw closure, not by `draw`.
+  Enemies are asset_pack monster sprites (Bandit/Cultist/Mushy) over the
+  player's shadow blob, anchored with the same `+ V2 0 4` trick. Enemy
+  frame precedence is hit-flinch (while `HitFlash` runs — its first frame
+  is the red flash painted into the art) > strike (a chaser's first 20
+  contact-cooldown ticks, a hexer's looped cast pose while `Casting`;
+  oversized 96x112 attack cells anchored at `-4` by their body box) >
+  walk/idle. Slain enemies leave a `Corpse` entity — purely visual, no
+  `Faction`/`Enemy`/`Health`, so combat and targeting never see one — whose
+  die-sheet ghost rises and alpha-fades over `corpseTicks`. The player's
+  hurt flash is a red tint (texture color-mod only darkens — white can't
+  flash a sprite) and the player's i-frames blink via alpha.
 
 ## apecs / sdl2 notes (apecs 0.10, sdl2 2.5.6)
 
